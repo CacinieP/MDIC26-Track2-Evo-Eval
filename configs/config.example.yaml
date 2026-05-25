@@ -1,0 +1,57 @@
+# MinerU DataAgent Configuration
+# API keys are auto-loaded from environment variables
+
+# API Server
+server:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  timeout: 300
+
+# LLM Configuration
+# Supports: OpenAI-compatible APIs (OpenRouter, DeepSeek, custom proxy, etc.)
+# Set environment variables: OPENAI_API_KEY, OPENAI_BASE_URL
+# Or hardcode below (not recommended for public repos)
+llm:
+  planner:
+    provider: "openai"  # openai | anthropic | openai_compatible
+    base_url: "${OPENAI_BASE_URL}"  # e.g. https://openrouter.ai/api/v1, leave empty for OpenAI official
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"  # or claude-sonnet-4-20250514, deepseek-chat, etc.
+    max_tokens: 4096
+    temperature: 0.1
+
+  verifier:
+    provider: "openai"
+    base_url: "${OPENAI_BASE_URL}"
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-mini"  # lighter model for verification
+    max_tokens: 2048
+    temperature: 0.0
+
+  # Fallback: no LLM, heuristic analysis only
+  fallback:
+    provider: "none"
+
+# MinerU Settings
+mineru:
+  device: "cuda"  # cuda | cpu
+  table_enable: true
+  formula_enable: true
+  ocr_lang: "auto"  # auto | ch | en
+
+# Processing Pipeline
+pipeline:
+  max_retries: 3
+  max_concurrent_tasks: 8
+  quality_threshold: 0.7
+
+# Logging
+logging:
+  level: "INFO"
+  file: "./logs/agent.log"
+
+# Storage
+storage:
+  output_dir: "./data/output"
+  temp_dir: "./data/temp"
