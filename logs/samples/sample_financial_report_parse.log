@@ -1,0 +1,34 @@
+2026-05-31 09:15:01 | INFO     | src.utils.logger:setup_logging:41 - Logging initialized
+2026-05-31 09:15:01 | INFO     | src.utils.config:load_config:87 - Config loaded from configs/config.yaml
+2026-05-31 09:15:02 | INFO     | src.tools.mineru_parser:__init__:142 - MinerUParser: MinerU (magic_pdf) detected and ready
+2026-05-31 09:15:02 | INFO     | src.agents.graph:create_agent_graph:1323 - DataAgent graph compiled: tools=['chart_analyzer', 'cross_page_merger', 'exporter', 'image_enhancer', 'mineru_parser', 'table_parser', 'verifier'] llm=no quality_threshold=0.7 max_retries=3 max_replan_cycles=2
+2026-05-31 09:15:02 | INFO     | src.api.main:startup:149 - API startup: agent graph ready with tools: ['chart_analyzer', 'cross_page_merger', 'exporter', 'image_enhancer', 'mineru_parser', 'table_parser', 'verifier']
+2026-05-31 09:15:02 | INFO     | src.api.main:startup:154 - MinerU DataAgent API server started
+2026-05-31 09:15:03 | INFO     | src.api.main:request_logging_middleware:81 - [req_a1b2c3d4] --> POST /tasks/upload
+2026-05-31 09:15:03 | INFO     | src.api.task_store:add_log:189 - File uploaded: finance_report.pdf (5532672 bytes)
+2026-05-31 09:15:03 | INFO     | src.api.main:request_logging_middleware:94 - [req_a1b2c3d4] <-- POST /tasks/upload 202 (0.452s)
+2026-05-31 09:15:03 | INFO     | src.agents.graph:_log:142 - [09:15:03][parse_1748672103] Entering analyze_task node
+2026-05-31 09:15:03 | INFO     | src.agents.graph:_heuristic_analyze:212 - [09:15:03][parse_1748672103] Assessment: types=['document_parse', 'table_extract', 'financial_report', 'cross_page_merge'], difficulty=hard
+2026-05-31 09:15:03 | INFO     | src.agents.graph:_log:142 - [09:15:03][parse_1748672103] Entering plan_execution node
+2026-05-31 09:15:03 | INFO     | src.agents.graph:plan_execution:482 - [09:15:03][parse_1748672103] Execution plan created: 4 steps
+2026-05-31 09:15:03 | INFO     | src.agents.graph:_log:142 - [09:15:03][parse_1748672103] Plan: 4 steps — ['step_000_extract', 'step_001_table', 'step_002_merge', 'step_003_verify']
+2026-05-31 09:15:03 | INFO     | src.agents.graph:execute_step:530 - [09:15:03][parse_1748672103] Executing step [1/4]: step_000_extract via mineru_parser
+2026-05-31 09:15:03 | INFO     | src.tools.mineru_parser:execute:202 - MinerUParser.execute | file=finance_report.pdf  suffix=.pdf  preprocess=True
+2026-05-31 09:15:04 | INFO     | src.tools.mineru_parser:_handle_pdf:247 - Reading PDF bytes: finance_report.pdf
+2026-05-31 09:15:04 | INFO     | src.tools.mineru_parser:_handle_pdf:258 - PymuDocDataset created | pages=411
+2026-05-31 09:15:04 | INFO     | src.tools.mineru_parser:_handle_pdf:262 - Classification result: TXT mode
+2026-05-31 09:15:04 | INFO     | src.tools.mineru_parser:_handle_pdf:271 - Running doc_analyze inference  table_enable=True  formula_enable=True
+2026-05-31 09:15:19 | INFO     | src.tools.mineru_parser:_handle_pdf:288 - Pipe processing complete
+2026-05-31 09:15:19 | INFO     | src.tools.mineru_parser:execute:224 - MinerUParser done | file=finance_report.pdf  pages=411  tables=28  images=12  time=15.87s
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:574 - [09:15:19][parse_1748672103] Step step_000_extract SUCCESS (15.87s)
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:530 - [09:15:19][parse_1748672103] Executing step [2/4]: step_001_table via table_parser
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:574 - [09:15:19][parse_1748672103] Step step_001_table SUCCESS (0.00s)
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:530 - [09:15:19][parse_1748672103] Executing step [3/4]: step_002_merge via cross_page_merger
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:574 - [09:15:19][parse_1748672103] Step step_002_merge SUCCESS (0.00s)
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:530 - [09:15:19][parse_1748672103] Executing step [4/4]: step_003_verify via verifier
+2026-05-31 09:15:19 | INFO     | src.agents.graph:execute_step:574 - [09:15:19][parse_1748672103] Step step_003_verify SUCCESS (0.00s)
+2026-05-31 09:15:19 | INFO     | src.agents.graph:_log:142 - [09:15:19][parse_1748672103] Entering verify_result node
+2026-05-31 09:15:19 | INFO     | src.agents.graph:verify_result:749 - [09:15:19][parse_1748672103] Verification: score=0.80 threshold=0.7 passed=True issues=0
+2026-05-31 09:15:19 | INFO     | src.agents.graph:_log:142 - [09:15:19][parse_1748672103] Entering format_output node
+2026-05-31 09:15:19 | INFO     | src.agents.graph:format_output:950 - [09:15:19][parse_1748672103] Final output produced: status=completed, errors=0
+2026-05-31 09:15:19 | INFO     | src.api.main:_process_task:346 - Task parse_1748672103 completed successfully

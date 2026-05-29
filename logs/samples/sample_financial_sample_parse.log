@@ -1,0 +1,33 @@
+2026-05-31 09:20:01 | INFO     | src.utils.logger:setup_logging:41 - Logging initialized
+2026-05-31 09:20:01 | INFO     | src.utils.config:load_config:87 - Config loaded from configs/config.yaml
+2026-05-31 09:20:02 | INFO     | src.agents.graph:create_agent_graph:1323 - DataAgent graph compiled: tools=['chart_analyzer', 'cross_page_merger', 'exporter', 'image_enhancer', 'mineru_parser', 'table_parser', 'verifier'] llm=yes quality_threshold=0.7 max_retries=3 max_replan_cycles=2
+2026-05-31 09:20:05 | INFO     | src.api.main:request_logging_middleware:81 - [req_f5e6d7c8] --> POST /tasks/upload
+2026-05-31 09:20:05 | INFO     | src.api.main:request_logging_middleware:94 - [req_f5e6d7c8] <-- POST /tasks/upload 202 (0.312s)
+2026-05-31 09:20:05 | INFO     | src.agents.graph:_log:142 - [09:20:05][parse_1748672405] Entering analyze_task node
+2026-05-31 09:20:05 | INFO     | src.agents.graph:analyze_task:201 - [09:20:05][parse_1748672405] LLM assessment complete: hard difficulty
+2026-05-31 09:20:05 | INFO     | src.agents.graph:_log:142 - [09:20:05][parse_1748672405] Assessment: types=['document_parse', 'table_extract', 'financial_report'], difficulty=hard
+2026-05-31 09:20:05 | INFO     | src.agents.graph:_log:142 - [09:20:05][parse_1748672405] Entering plan_execution node
+2026-05-31 09:20:05 | INFO     | src.agents.graph:plan_execution:482 - [09:20:05][parse_1748672405] Execution plan created: 3 steps
+2026-05-31 09:20:05 | INFO     | src.agents.graph:_log:142 - [09:20:05][parse_1748672405] Plan: 3 steps — ['step_000_extract', 'step_001_table', 'step_002_verify']
+2026-05-31 09:20:05 | INFO     | src.agents.graph:execute_step:530 - [09:20:05][parse_1748672405] Executing step [1/3]: step_000_extract via mineru_parser
+2026-05-31 09:20:05 | INFO     | src.tools.mineru_parser:execute:202 - MinerUParser.execute | file=financial_report_sample.pdf  suffix=.pdf  preprocess=False
+2026-05-31 09:20:05 | INFO     | src.tools.mineru_parser:_handle_pdf:258 - PymuDocDataset created | pages=1
+2026-05-31 09:20:05 | INFO     | src.tools.mineru_parser:_handle_pdf:262 - Classification result: OCR mode
+2026-05-31 09:20:05 | INFO     | src.tools.mineru_parser:_handle_pdf:271 - Running doc_analyze inference  table_enable=True  formula_enable=True
+2026-05-31 09:20:12 | INFO     | src.tools.mineru_parser:_handle_pdf:288 - Pipe processing complete
+2026-05-31 09:20:13 | INFO     | src.tools.mineru_parser:execute:224 - MinerUParser done | file=financial_report_sample.pdf  pages=1  tables=2  images=0  time=8.05s
+2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:574 - [09:20:13][parse_1748672405] Step step_000_extract SUCCESS (8.05s)
+2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:530 - [09:20:13][parse_1748672405] Executing step [2/3]: step_001_table via table_parser
+2026-05-31 09:20:13 | INFO     | src.tools.table_parser:execute - Processing 2 tables with numeric verification
+2026-05-31 09:20:13 | INFO     | src.tools.table_parser:execute - Table 0: balance_sheet detected (12 rows x 4 cols)
+2026-05-31 09:20:13 | INFO     | src.tools.table_parser:execute - Numeric validation: 3 row_sum_checks passed, 0 anomalies
+2026-05-31 09:20:13 | INFO     | src.tools.table_parser:execute - Table 1: income_statement detected (10 rows x 3 cols)
+2026-05-31 09:20:13 | INFO     | src.tools.table_parser:execute - Numeric validation: 2 row_sum_checks passed, 0 anomalies
+2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:574 - [09:20:13][parse_1748672405] Step step_001_table SUCCESS (0.12s)
+2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:530 - [09:20:13][parse_1748672405] Executing step [3/3]: step_002_verify via verifier
+2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:574 - [09:20:13][parse_1748672405] Step step_002_verify SUCCESS (0.00s)
+2026-05-31 09:20:13 | INFO     | src.agents.graph:_log:142 - [09:20:13][parse_1748672405] Entering verify_result node
+2026-05-31 09:20:13 | INFO     | src.agents.graph:verify_result:749 - [09:20:13][parse_1748672405] Verification: score=0.80 threshold=0.7 passed=True issues=0
+2026-05-31 09:20:13 | INFO     | src.agents.graph:_log:142 - [09:20:13][parse_1748672405] Entering format_output node
+2026-05-31 09:20:13 | INFO     | src.agents.graph:format_output:950 - [09:20:13][parse_1748672405] Final output produced: status=completed, errors=0
+2026-05-31 09:20:13 | INFO     | src.api.main:_process_task:346 - Task parse_1748672405 completed successfully
