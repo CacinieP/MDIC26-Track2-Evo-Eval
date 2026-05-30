@@ -1,0 +1,58 @@
+# =============================================================================
+# .dockerignore — keep Docker context small
+# =============================================================================
+
+# Version control
+.git
+.gitignore
+
+# Python bytecode and caches
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test and CI artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+.github/
+
+# Docker files (avoid recursive COPY)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# Data directories (mount at runtime instead)
+data/output/
+data/temp/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Large model caches
+models/
+*.bin
+*.onnx
+*.pth
+*.safetensors
