@@ -1,0 +1,97 @@
+============================================================
+MinerU Precise API Execution Log
+Date: 2026-05-31
+API Mode: cloud (Precise API with Token)
+============================================================
+
+--- Sample 1: aerospace_standard.pdf (289 KB, 8 pages) ---
+2026-05-31 21:12:41 | INFO | MinerUParser: MinerU (magic_pdf) detected and ready
+2026-05-31 21:12:41 | INFO | MinerUParser.execute | file=aerospace_standard.pdf  suffix=.pdf  preprocess=True
+2026-05-31 21:12:43 | INFO | Reading PDF bytes: aerospace_standard.pdf
+⚠️ GitHub assets check failure: 403 rate limit exceeded
+2026-05-31 21:13:06 | ERROR | MinerUParser primary handler failed: [Errno 2] No such file or directory: 'doclayout_yolo_docstructbench_imgsz1280_2501.pt'
+2026-05-31 21:13:06 | INFO | MinerU cloud: using Precise API for aerospace_standard.pdf
+2026-05-31 21:13:13 | INFO | Precise API batch created: 96d5d486-6340-4329-9d9c-b1b6ea1dad93
+2026-05-31 21:13:36 | INFO | File uploaded, waiting for parsing...
+2026-05-31 21:13:36 | INFO | [0s] pending...
+2026-05-31 21:13:43 | INFO | [7s] Cloud parse completed
+2026-05-31 21:13:44 | INFO | Downloaded result zip: 761743 bytes
+2026-05-31 21:13:44 | INFO | Precise API completed: 15994 chars, 8 pages
+2026-05-31 21:13:44 | INFO | MinerUParser done | file=aerospace_standard.pdf  pages=8  tables=0  images=0  time=63.16s
+
+Result:
+  Pages: 8
+  Markdown: 15994 chars
+  Tables: 0
+  Parser: mineru_cloud_precise
+  Batch ID: 96d5d486-6340-4329-9d9c-b1b6ea1dad93
+
+Output Files:
+  data/output/aerospace_standard_precise.json
+  data/output/aerospace_standard_precise.md
+
+============================================================
+--- Sample 2: finance_report.pdf (5524 KB, 411 pages) ---
+2026-05-31 21:19:13 | INFO | MinerUParser: MinerU (magic_pdf) detected and ready
+2026-05-31 21:19:13 | INFO | MinerUParser.execute | file=finance_report.pdf  suffix=.pdf  preprocess=True
+2026-05-31 21:19:13 | INFO | api_mode=cloud, routing directly to cloud API for finance_report.pdf
+2026-05-31 21:19:13 | INFO | PDF has 411 pages (>200), splitting into chunks
+2026-05-31 21:19:13 | INFO | Split chunk 1: pages 1-200 (finance_report_part1_1-200.pdf)
+2026-05-31 21:19:13 | INFO | Split chunk 2: pages 201-400 (finance_report_part2_201-400.pdf)
+2026-05-31 21:19:13 | INFO | Split chunk 3: pages 401-411 (finance_report_part3_401-411.pdf)
+2026-05-31 21:19:13 | INFO | Split finance_report.pdf into 3 chunks
+
+--- Chunk 1/3 (pages 1-200) ---
+2026-05-31 21:19:13 | INFO | Processing chunk 1/3: finance_report_part1_1-200.pdf
+2026-05-31 21:19:13 | INFO | MinerU cloud: using Precise API for finance_report_part1_1-200.pdf
+2026-05-31 21:19:14 | INFO | Precise API batch created: e8b08acd-acd9-4301-bbe1-67fc690c55b0
+2026-05-31 21:19:47 | INFO | File uploaded, waiting for parsing...
+2026-05-31 21:19:49 | INFO | [2s] running...
+2026-05-31 21:20:54 | INFO | [66s] Cloud parse completed
+2026-05-31 21:21:00 | INFO | Precise API completed: 210757 chars, 200 pages
+2026-05-31 21:21:00 | INFO | Chunk 1 done: 200 pages, 210757 chars, 0 tables
+
+--- Chunk 2/3 (pages 201-400) ---
+2026-05-31 21:21:00 | INFO | Processing chunk 2/3: finance_report_part2_201-400.pdf
+2026-05-31 21:21:00 | INFO | MinerU cloud: using Precise API for finance_report_part2_201-400.pdf
+2026-05-31 21:21:00 | INFO | Precise API batch created: 9cab61df-0e14-4a95-a6cb-592f3febca69
+2026-05-31 21:23:47 | INFO | File uploaded, waiting for parsing...
+2026-05-31 21:24:39 | INFO | [0s] waiting-file...
+2026-05-31 21:24:45 | INFO | [5s] running...
+2026-05-31 21:24:22 | INFO | [79s] Cloud parse completed
+2026-05-31 21:24:33 | INFO | Precise API completed: 225942 chars, 200 pages
+2026-05-31 21:24:33 | INFO | Chunk 2 done: 200 pages, 225942 chars, 0 tables
+
+--- Chunk 3/3 (pages 401-411) ---
+2026-05-31 21:24:33 | INFO | Processing chunk 3/3: finance_report_part3_401-411.pdf
+2026-05-31 21:24:33 | INFO | MinerU cloud: using Precise API for finance_report_part3_401-411.pdf
+2026-05-31 21:24:33 | INFO | Precise API batch created: b1b6ea1d-6340-4329-9d9c-96d5d486acd9
+2026-05-31 21:24:39 | INFO | File uploaded, waiting for parsing...
+2026-05-31 21:24:51 | INFO | [12s] Cloud parse completed
+2026-05-31 21:24:55 | INFO | Precise API completed: 26537 chars, 11 pages
+2026-05-31 21:24:55 | INFO | Chunk 3 done: 11 pages, 26537 chars, 0 tables
+
+--- Merged Result ---
+2026-05-31 21:24:55 | INFO | Split processing complete: 411/411 pages, 463250 chars, 0 tables from 3 batches
+2026-05-31 21:24:55 | INFO | MinerUParser done | file=finance_report.pdf  pages=411  tables=0  images=0  time=341.37s
+
+Result:
+  Pages: 411 (full coverage)
+  Markdown: 463,250 chars (merged from 3 chunks)
+  Parser: mineru_cloud_precise_split
+  Total Chunks: 3
+  Batch IDs: [e8b08acd..., 9cab61df..., b1b6ea1d...]
+  Total Time: 341.4s
+
+Output Files:
+  data/output/finance_report_precise.json
+  data/output/finance_report_precise.md
+
+============================================================
+Summary: Precise API Processing
+============================================================
+| File                    | Pages | Chars     | Parser                  | Time     |
+|-------------------------|-------|-----------|-------------------------|----------|
+| aerospace_standard.pdf  | 8     | 15,994    | mineru_cloud_precise    | 63.2s    |
+| finance_report.pdf      | 411   | 463,250   | mineru_cloud_precise_split | 341.4s |
+============================================================

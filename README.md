@@ -5,7 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![LangGraph](https://img.shields.io/badge/Agent-LangGraph-green)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
-![Tests](https://img.shields.io/badge/Tests-318%20passed-success)
+![Tests](https://img.shields.io/badge/Tests-325%20passed-success)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ## 项目概述
@@ -151,7 +151,7 @@ python main.py batch ./documents/ --output-dir ./output
 # 运行演示
 python main.py demo
 
-# 运行测试（318 个用例，默认跳过集成测试）
+# 运行测试（325 个用例，默认跳过集成测试）
 python -m pytest tests/ -v
 
 # 运行集成测试
@@ -217,7 +217,7 @@ curl http://localhost:8000/capabilities
 │   └── api/                         # API 服务
 │       ├── main.py                  # FastAPI REST API（10+ 端点 + SSE 日志流）
 │       └── task_store.py            # 线程安全内存任务存储
-├── tests/                           # 测试（318 用例，10 模块）
+├── tests/                           # 测试（325 用例，10 模块）
 │   ├── test_api.py                  # TaskStore + API 端点（21 tests）
 │   ├── test_config.py               # 配置加载/校验/环境变量展开（19 tests）
 │   ├── test_graph.py                # Agent 图/路由/合并/验证（27 tests）

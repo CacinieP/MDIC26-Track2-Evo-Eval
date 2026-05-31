@@ -205,6 +205,7 @@ pip install pandas numpy matplotlib
 pip install beautifulsoup4 lxml
 pip install python-docx python-pptx pdf2image
 pip install pytest pytest-asyncio httpx
+pip install python-dotenv>=1.0.0
 ```
 
 ### 4.5 下载 MinerU 模型
@@ -396,6 +397,14 @@ export ANTHROPIC_API_KEY="sk-ant-xxx..."
 # 或使用 OpenAI 兼容 API
 export OPENAI_API_KEY="sk-xxx..."
 export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+# MinerU Cloud API Token (可选，用于云端解析)
+export MINERU_API_TOKEN="你的Token"    # 从 mineru.net 获取
+
+# 或使用 .env 文件（推荐，已被 .gitignore 忽略）
+# 创建 .env 文件：
+echo 'MINERU_API_TOKEN=你的Token' > .env
+# python-dotenv 会自动加载
 ```
 
 ### 5.3 无 LLM 模式运行
@@ -406,6 +415,43 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 - 参考消解使用规则 + 模糊匹配
 
 此模式下所有功能仍然可用，但分析精度会有所降低。
+
+### 5.4 云侧部署模式 / Cloud Deployment Mode
+
+系统支持三种 MinerU 解析模式，通过配置或环境变量控制:
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `auto` (默认) | 优先尝试本地解析，失败后自动切换云端 | 通用场景，兼顾速度与可靠性 |
+| `cloud` | 始终使用 MinerU 云端 API 解析 | 无 GPU 或本地模型缺失时 |
+| `local` | 仅使用本地 MinerU 解析 | 离线环境或有 GPU 的本地部署 |
+
+**MinerU Cloud API 提供两类接口:**
+
+| 接口类型 | Token 要求 | 文件限制 | 返回格式 |
+|----------|-----------|---------|---------|
+| Precise API (精确解析) | 需要 `MINERU_API_TOKEN` | ≤200 MB / ≤200 页 | 结构化 zip (含 JSON/Markdown) |
+| Agent Lightweight API (轻量解析) | 无需 Token | ≤10 MB / ≤20 页 | Markdown 文本 |
+
+> **自动分片 / Auto-split:** 超过 200 页的 PDF 会被自动切分为多个 chunk 分别解析后合并结果。
+
+**配置方式:**
+
+```yaml
+# 在 configs/config.yaml 中设置:
+mineru:
+  api_mode: "cloud"                           # auto | cloud | local
+  api_token: "${MINERU_API_TOKEN}"            # 从环境变量或 .env 读取
+```
+
+或通过环境变量:
+
+```bash
+export MINERU_API_MODE="cloud"
+export MINERU_API_TOKEN="你的Token"
+```
+
+> **注意:** 使用 `cloud` 模式前请确保已获取有效的 `MINERU_API_TOKEN`（从 [mineru.net](https://mineru.net) 注册获取）。Agent Lightweight API 无需 Token 即可使用，但有更严格的文件大小和页数限制。
 
 ---
 
@@ -758,7 +804,7 @@ curl "http://localhost:8000/tasks?limit=20&offset=0"
 ### 8.1 运行测试
 
 ```bash
-# 运行所有单元测试 (93 tests, 默认跳过集成测试)
+# 运行所有单元测试 (325 tests, 默认跳过集成测试)
 python -m pytest tests/ -v
 
 # 运行并显示详细输出
@@ -1102,8 +1148,11 @@ MDIC26-Track2-Evo-Eval/
 │       ├── config.py                # 配置加载: YAML解析/环境变量展开/校验
 │       └── logger.py                # 日志配置: loguru + 文件轮转
 │
+├── .env                              # 环境变量（已被 .gitignore 忽略）
+│
 ├── scripts/                         # 辅助脚本
-│   └── run_demo.py                  # 独立演示脚本: 生成样本PDF并处理
+│   ├── run_demo.py                  # 独立演示脚本: 生成样本PDF并处理
+│   └── test_cloud_api.py            # 云端API测试脚本
 │
 ├── tests/                           # 测试用例
 │

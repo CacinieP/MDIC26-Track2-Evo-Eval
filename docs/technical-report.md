@@ -89,6 +89,33 @@
 | 图像增强 | OpenCV + scikit-image | 4.9+ |
 | 任务管理 | 自研 TaskStore (线程安全) | - |
 | 日志系统 | loguru 结构化日志 | 0.7.3 |
+| 云 API 集成 | MinerU Precise API + Free Agent API | - |
+| Token 管理 | python-dotenv + .env | 1.0.x |
+
+### 1.5 双模部署架构
+
+系统支持 **本地 + 云端** 双模部署，根据运行环境自动选择最优解析路径：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| **Local** | 调用本地 MinerU 模型（GPU 加速），零外部依赖 | 有 GPU 的服务器/本地开发 |
+| **Cloud (Precise)** | MinerU Precise API（需 Token），支持 ≤200MB / ≤200 页，返回 Zip 包含 MD + JSON | 大文件、高精度需求 |
+| **Cloud (Free)** | MinerU Free Agent API（无需 Token），支持 ≤10MB / ≤20 页，返回纯 Markdown | 小文件快速处理、无 GPU 环境 |
+| **Auto** | 优先 Local → 失败回退 Cloud（先尝试 Precise，再 Free） | 生产环境最佳容错 |
+
+**Token 管理**：通过 `.env` 文件 + `python-dotenv` 管理云 API 凭证，避免硬编码：
+
+```bash
+# .env
+MINERU_API_TOKEN=your_precise_api_token_here
+```
+
+```python
+# 自动加载 .env
+from dotenv import load_dotenv
+load_dotenv()
+api_token = os.getenv("MINERU_API_TOKEN", "")
+```
 
 ---
 
@@ -233,6 +260,59 @@ DPI 提升 (< 200 → 300)
 3. Chart-to-Table 转换
 4. 无 LLM 时回退到 OpenCV + OCR 基础识别
 
+### 3.5 大文件自动分段处理
+
+**痛点**：MinerU Precise API 单次请求限制 ≤200 页，超过限制的文件无法直接提交。
+
+**方案**：
+
+```
+1. 页数检测：PyMuPDF (fitz) 读取 PDF → doc.page_count
+     ↓
+2. 阈值判断：页数 > 200 → 触发自动分段
+     ↓
+3. 分段切割：PyMuPDF insert_pdf 按 ≤200 页切分为多个临时 PDF
+   - chunk_1: pages[0:200]
+   - chunk_2: pages[200:400]
+   - chunk_N: pages[剩余...]
+     ↓
+4. 逐段调用：每个 chunk 独立提交 Precise API 解析
+     ↓
+5. 结果合并：
+   - Markdown: 以 "---" 分隔符拼接
+   - content_list: 合并数组，调整 page_idx 偏移量
+   - tables: 合并数组，调整页码引用
+     ↓
+6. 清理：删除临时分段 PDF 文件
+```
+
+**核心代码逻辑**：
+```python
+def split_pdf_by_pages(pdf_path: str, max_pages: int = 200) -> list[str]:
+    """将大 PDF 按页数切分为多个临时文件"""
+    import fitz  # PyMuPDF
+    src = fitz.open(pdf_path)
+    chunks = []
+    for start in range(0, len(src), max_pages):
+        end = min(start + max_pages, len(src))
+        dst = fitz.open()  # 新建空 PDF
+        dst.insert_pdf(src, from_page=start, to_page=end - 1)
+        chunk_path = f"{pdf_path}.chunk_{start}_{end}.pdf"
+        dst.save(chunk_path)
+        dst.close()
+        chunks.append((chunk_path, start))  # (path, page_offset)
+    src.close()
+    return chunks
+```
+
+**实测案例**：
+
+| 文件 | 总页数 | 分段数 | 各段页数 | 总耗时 | 输出字符数 |
+|------|--------|--------|----------|--------|-----------|
+| finance_report.pdf | 411 | 3 | 200+200+11 | 341.4s | 463,250 chars |
+
+该 411 页金融报告被自动切分为 3 个分段，每段独立提交 Precise API 解析后合并，最终生成 463,250 字符的完整 Markdown 文档。
+
 ---
 
 ## 四、典型任务执行示例（5个）
@@ -328,6 +408,8 @@ TOTAL ASSETS               3,580,246,791.35    3,222,222,221.11    +11.11%
 | 材料科学论文 | 252页 | 7.8 MB | ~20s | 252 | 296,973 | ✅ completed |
 | 航天国标文件 | 8页 | 290 KB | ~5s | 8 | 4,472 | ✅ completed |
 | 自制财务样本 | 1页 | 3.7 KB | 8.1s | 1 | 1,790 | ✅ completed |
+| finance_report.pdf (Precise API) | 411页 | 5.4 MB | 341.4s (3 chunks) | 411 | 463,250 | ✅ completed |
+| aerospace_standard.pdf (Precise API) | 8页 | 289 KB | 63.2s | 8 | 15,994 | ✅ completed |
 
 **吞吐量**：约 25-30 页/秒（PyMuPDF 文本模式）
 
@@ -352,7 +434,7 @@ TOTAL ASSETS               3,580,246,791.35    3,222,222,221.11    +11.11%
 - ✅ **处理超时保护**：单文件最大处理时间 300s
 - ✅ **资源使用监控**：累积错误 > 10 自动中止
 - ✅ **动态质量评分**：四维内容特征动态打分，非固定阈值
-- ✅ **318 个自动化测试**：覆盖全部 10 个核心模块
+- ✅ **325 个自动化测试**：覆盖全部 10 个核心模块
 - ✅ **详尽的执行日志**：每步操作可追溯（时间戳 + 任务ID + 步骤ID）
 - ✅ **API 健康检查**：`GET /health` 实时返回系统状态
 - ✅ **线程安全任务存储**：TaskStore 支持并发请求
@@ -426,7 +508,7 @@ TOTAL ASSETS               3,580,246,791.35    3,222,222,221.11    +11.11%
 MDIC26-Track2-Evo-Eval/
 ├── main.py                          # CLI 入口 (serve/parse/batch/demo)
 ├── requirements.txt                 # Python 依赖
-├── pytest.ini                       # 测试配置 (318 tests, asyncio auto)
+├── pytest.ini                       # 测试配置 (325 tests, asyncio auto)
 ├── LICENSE                          # MIT License
 ├── configs/
 │   └── config.example.yaml          # 配置模板
@@ -450,19 +532,21 @@ MDIC26-Track2-Evo-Eval/
 │       ├── config.py                # YAML配置+${ENV}变量展开
 │       ├── logger.py                # loguru结构化日志
 │       └── llm_client.py           # 通用LLM客户端 (GLM/StepFun/Anthropic/OpenAI)
-├── tests/                           # 318个测试用例 (10模块)
+├── tests/                           # 325个测试用例 (10模块)
 │   ├── test_api.py                  # TaskStore + API端点 (21 tests)
 │   ├── test_config.py               # 配置加载/校验 (19 tests)
 │   ├── test_graph.py                # Agent图/路由/验证 (27 tests)
 │   ├── test_planner.py              # 任务规划/关键词检测 (15 tests)
 │   ├── test_table_parser.py         # 表格解析/数值 (14 tests)
-│   ├── test_mineru_parser.py        # MinerU解析/回退/预处理 (38 tests)
+│   ├── test_mineru_parser.py        # MinerU解析/回退/图像预处理/自动分段 (45 tests)
 │   ├── test_chart_analyzer.py       # 图表分类/视觉/数据提取 (56 tests)
 │   ├── test_crosspage_merger.py     # 跨页合并/实体/指代消解 (50 tests)
 │   ├── test_image_enhancer.py       # 图像增强/质量评估/OCR投票 (58 tests)
 │   └── test_llm_client.py           # LLM客户端/提供商检测 (20 tests)
 ├── scripts/
-│   └── run_demo.py                  # 独立演示脚本
+│   ├── run_demo.py                  # 独立演示脚本
+│   └── test_cloud_api.py            # 云 API (Precise/Free) 集成测试
+├── .env                             # API Token 配置 (python-dotenv 加载)
 ├── data/
 │   ├── samples/                     # 测试样本 (3 PDF + 1 DOCX)
 │   └── output/                      # 解析结果JSON + 提取图片
