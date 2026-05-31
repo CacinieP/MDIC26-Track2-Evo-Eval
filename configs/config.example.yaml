@@ -39,6 +39,11 @@ mineru:
   table_enable: true
   formula_enable: true
   ocr_lang: "auto"  # auto | ch | en
+  # Cloud API mode: when local models are unavailable, auto-route to MinerU cloud
+  # api_mode: "auto"    # auto (try local first, then cloud) | cloud (always use cloud) | local (local only)
+  # api_token: ""       # MinerU API Token from mineru.net — empty = use free Agent API
+  api_mode: "auto"
+  api_token: "${MINERU_API_TOKEN}"
 
 # Processing Pipeline
 pipeline:

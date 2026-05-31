@@ -760,6 +760,11 @@ async def verify_result(state: AgentState) -> dict:
     else:
         verification = _heuristic_verify(request, context_summary, step_results, plan)
 
+    # Carry forward replan count from previous verification to prevent infinite loops
+    prev_verification = state.get("verification_result")
+    if prev_verification and "_replan_count" in prev_verification:
+        verification["_replan_count"] = prev_verification["_replan_count"]
+
     score = verification.get("quality_score", 0.0)
     passed = score >= QUALITY_THRESHOLD
     verification["passed"] = passed

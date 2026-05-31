@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import os
 import shutil
 import time
@@ -139,10 +140,15 @@ class MinerUParser:
         self.ocr_lang = self.config.get("ocr_lang", "auto")
         self._mineru_available = _check_mineru_available()
         self._ocr_engine: Any | None = None  # Lazy-initialised PaddleOCR singleton
+
+        # Cloud API configuration
+        self.api_token = self.config.get("api_token", os.environ.get("MINERU_API_TOKEN", ""))
+        self.api_mode = self.config.get("api_mode", "auto")  # auto | cloud | local
+
         if self._mineru_available:
             logger.info("MinerUParser: MinerU (magic_pdf) detected and ready")
         else:
-            logger.warning("MinerUParser: MinerU not installed — fallback parsers will be used")
+            logger.warning("MinerUParser: MinerU local models not available — will use cloud API or fallback")
 
     # ------------------------------------------------------------------
     # Public API
@@ -232,8 +238,14 @@ class MinerUParser:
                 raise ValueError(f"Unhandled suffix: {suffix}")
         except Exception as exc:
             logger.error(f"MinerUParser primary handler failed for {file_path.name}: {exc}")
-            logger.info("Falling back to basic parsers")
-            result = await self._fallback_parse(file_path)
+
+            # Try MinerU cloud API before falling back to basic parsers
+            cloud_result = await self._parse_via_cloud_api(file_path)
+            if cloud_result is not None:
+                result = cloud_result
+            else:
+                logger.info("Cloud API unavailable or failed — falling back to basic parsers")
+                result = await self._fallback_parse(file_path)
 
         elapsed = time.perf_counter() - t0
         result["metadata"]["parse_time_s"] = round(elapsed, 3)
@@ -950,6 +962,296 @@ class MinerUParser:
                 "parser": "fallback_pdf",
             },
         }
+
+    # ------------------------------------------------------------------
+    # Cloud API integration (MinerU cloud service)
+    # ------------------------------------------------------------------
+
+    async def _parse_via_cloud_api(self, file_path: Path) -> dict | None:
+        """
+        Parse a document via MinerU cloud API when local models are unavailable.
+
+        Supports two modes:
+        - Agent lightweight API (no token, ≤10MB/≤20 pages, Markdown only)
+        - Precise API (with token, ≤200MB/≤200 pages, Zip with MD+JSON)
+
+        Returns structured dict on success, None on failure.
+        """
+        import requests as sync_requests
+
+        file_size = file_path.stat().st_size
+        file_name = file_path.name
+        suffix = _suffix(file_path)
+        has_token = bool(self.api_token)
+
+        # Determine which API to use
+        use_precise = has_token
+        use_agent = not has_token
+
+        # Size checks
+        if use_agent and file_size > 10 * 1024 * 1024:
+            logger.warning(f"File too large for Agent API ({file_size/1024/1024:.1f}MB > 10MB limit)")
+            use_agent = False
+            if not has_token:
+                logger.warning("No API token — cannot use Precise API either")
+                return None
+
+        if use_precise and file_size > 200 * 1024 * 1024:
+            logger.error(f"File too large for any cloud API ({file_size/1024/1024:.1f}MB)")
+            return None
+
+        try:
+            if use_precise:
+                return await self._cloud_precise_api(file_path, file_name, suffix)
+            elif use_agent:
+                return await self._cloud_agent_api(file_path, file_name, suffix)
+            else:
+                return None
+        except Exception as exc:
+            logger.error(f"MinerU cloud API failed: {exc}")
+            return None
+
+    async def _cloud_agent_api(self, file_path: Path, file_name: str, suffix: str) -> dict | None:
+        """Use the Agent lightweight API (no token, file upload mode)."""
+        import requests as sync_requests
+        import asyncio
+
+        BASE_URL = "https://mineru.net/api/v1/agent"
+
+        logger.info(f"MinerU cloud: using Agent lightweight API for {file_name}")
+
+        # Step 1: Get signed upload URL
+        data = {
+            "file_name": file_name,
+            "language": "ch",
+            "enable_table": self.table_enable,
+            "is_ocr": True,
+            "enable_formula": self.formula_enable,
+        }
+
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: sync_requests.post(f"{BASE_URL}/parse/file", json=data, timeout=30)
+        )
+        result = resp.json()
+
+        if result.get("code") != 0:
+            logger.error(f"Agent API submit failed: {result.get('msg', 'unknown')}")
+            return None
+
+        task_id = result["data"]["task_id"]
+        file_url = result["data"]["file_url"]
+        logger.info(f"Agent API task created: {task_id}")
+
+        # Step 2: Upload file via PUT
+        with open(file_path, "rb") as f:
+            put_resp = await loop.run_in_executor(
+                None,
+                lambda: sync_requests.put(file_url, data=f, timeout=60)
+            )
+        if put_resp.status_code not in (200, 201):
+            logger.error(f"File upload failed: HTTP {put_resp.status_code}")
+            return None
+        logger.info("File uploaded to cloud, waiting for parsing...")
+
+        # Step 3: Poll for result
+        markdown_content = await self._cloud_poll(
+            f"{BASE_URL}/parse/{task_id}",
+            timeout=300,
+            extract_fn=lambda r: r["data"].get("markdown_url"),
+            has_token=False,
+        )
+
+        if markdown_content is None:
+            return None
+
+        # Download the Markdown
+        md_resp = await loop.run_in_executor(
+            None,
+            lambda: sync_requests.get(markdown_content, timeout=30)
+        )
+        md_text = md_resp.text
+
+        logger.info(f"Agent API completed: {len(md_text)} chars Markdown")
+
+        return {
+            "source_file": str(file_path),
+            "pages": 0,  # Unknown from Agent API
+            "content_list": [{"type": "text", "text": md_text, "page": 0}],
+            "markdown": md_text,
+            "tables": [],  # Agent API doesn't return structured tables
+            "images": [],
+            "metadata": {
+                "file_name": file_name,
+                "file_size": file_path.stat().st_size,
+                "parser": "mineru_cloud_agent",
+                "api_task_id": task_id,
+            },
+        }
+
+    async def _cloud_precise_api(self, file_path: Path, file_name: str, suffix: str) -> dict | None:
+        """Use the Precise API (with token, file upload mode)."""
+        import requests as sync_requests
+        import asyncio
+        import zipfile
+        import io
+
+        BASE_URL = "https://mineru.net/api/v4"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_token}",
+        }
+
+        logger.info(f"MinerU cloud: using Precise API for {file_name}")
+
+        # Step 1: Get batch upload URL
+        data = {
+            "files": [{"name": file_name}],
+            "model_version": "vlm",
+            "enable_table": self.table_enable,
+            "enable_formula": self.formula_enable,
+        }
+
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: sync_requests.post(f"{BASE_URL}/file-urls/batch", json=data, headers=headers, timeout=30)
+        )
+        result = resp.json()
+
+        if result.get("code") != 0:
+            logger.error(f"Precise API submit failed: {result.get('msg', 'unknown')}")
+            return None
+
+        batch_id = result["data"]["batch_id"]
+        upload_url = result["data"]["file_urls"][0]
+        logger.info(f"Precise API batch created: {batch_id}")
+
+        # Step 2: Upload file
+        with open(file_path, "rb") as f:
+            put_resp = await loop.run_in_executor(
+                None,
+                lambda: sync_requests.put(upload_url, data=f, timeout=120)
+            )
+        if put_resp.status_code not in (200, 201):
+            logger.error(f"File upload failed: HTTP {put_resp.status_code}")
+            return None
+        logger.info("File uploaded, waiting for parsing...")
+
+        # Step 3: Poll for result
+        zip_url = await self._cloud_poll(
+            f"{BASE_URL}/extract-results/batch/{batch_id}",
+            timeout=600,
+            extract_fn=lambda r: r["data"]["extract_result"][0].get("full_zip_url") if r["data"].get("extract_result") else None,
+            has_token=True,
+        )
+
+        if zip_url is None:
+            return None
+
+        # Step 4: Download and parse the Zip
+        zip_resp = await loop.run_in_executor(
+            None,
+            lambda: sync_requests.get(zip_url, timeout=60)
+        )
+        logger.info(f"Downloaded result zip: {len(zip_resp.content)} bytes")
+
+        md_text = ""
+        content_list = []
+        tables = []
+        page_count = 0
+
+        with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+            for name in zf.namelist():
+                if name.endswith("full.md") or name.endswith(".md"):
+                    md_text = zf.read(name).decode("utf-8")
+                elif name.endswith("content_list.json"):
+                    try:
+                        cl = json.loads(zf.read(name).decode("utf-8"))
+                        content_list = cl if isinstance(cl, list) else []
+                    except Exception:
+                        pass
+                elif name.endswith("layout.json") or name.endswith("model.json"):
+                    try:
+                        layout = json.loads(zf.read(name).decode("utf-8"))
+                        if isinstance(layout, list):
+                            page_count = len(layout)
+                    except Exception:
+                        pass
+
+        logger.info(f"Precise API completed: {len(md_text)} chars, {page_count} pages")
+
+        return {
+            "source_file": str(file_path),
+            "pages": page_count,
+            "content_list": content_list,
+            "markdown": md_text,
+            "tables": tables,
+            "images": [],
+            "metadata": {
+                "file_name": file_name,
+                "file_size": file_path.stat().st_size,
+                "parser": "mineru_cloud_precise",
+                "api_batch_id": batch_id,
+            },
+        }
+
+    async def _cloud_poll(
+        self,
+        poll_url: str,
+        timeout: int = 300,
+        extract_fn = None,
+        has_token: bool = False,
+    ) -> str | None:
+        """Poll a cloud API until done, return the extracted URL or None."""
+        import requests as sync_requests
+        import asyncio
+
+        headers = {}
+        if has_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
+        loop = asyncio.get_running_loop()
+        t0 = time.perf_counter()
+        interval = 3
+
+        while time.perf_counter() - t0 < timeout:
+            resp = await loop.run_in_executor(
+                None,
+                lambda: sync_requests.get(poll_url, headers=headers, timeout=30)
+            )
+            result = resp.json()
+            state = result.get("data", {}).get("state", "unknown")
+            elapsed = int(time.perf_counter() - t0)
+
+            if state == "done":
+                url = extract_fn(result) if extract_fn else None
+                if url:
+                    logger.info(f"[{elapsed}s] Cloud parse completed")
+                    return url
+                logger.error("Cloud parse done but no result URL found")
+                return None
+
+            if state == "failed":
+                err = result.get("data", {}).get("err_msg", "unknown error")
+                logger.error(f"[{elapsed}s] Cloud parse failed: {err}")
+                return None
+
+            # Still processing
+            progress = result.get("data", {}).get("extract_progress", {})
+            if progress:
+                logger.info(
+                    f"[{elapsed}s] {state}: "
+                    f"{progress.get('extracted_pages', '?')}/{progress.get('total_pages', '?')} pages"
+                )
+            else:
+                logger.info(f"[{elapsed}s] {state}...")
+
+            await asyncio.sleep(interval)
+
+        logger.error(f"Cloud poll timed out after {timeout}s")
+        return None
 
     # ------------------------------------------------------------------
     # Generic fallback (last resort)
