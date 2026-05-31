@@ -889,39 +889,40 @@ class MinerUParser:
             import fitz  # PyMuPDF
 
             doc = fitz.open(str(file_path))
-            page_count = len(doc)
-            logger.info(f"PyMuPDF loaded: {page_count} pages")
+            try:
+                page_count = len(doc)
+                logger.info(f"PyMuPDF loaded: {page_count} pages")
 
-            out_dir = self._make_output_dir(file_path)
-            img_dir = out_dir / "images"
-            img_dir.mkdir(parents=True, exist_ok=True)
+                out_dir = self._make_output_dir(file_path)
+                img_dir = out_dir / "images"
+                img_dir.mkdir(parents=True, exist_ok=True)
 
-            for page_num in range(page_count):
-                page = doc[page_num]
-                text = page.get_text("text").strip()
-                if text:
-                    md_parts.append(text)
-                    content_list.append({"type": "text", "text": text, "page": page_num})
+                for page_num in range(page_count):
+                    page = doc[page_num]
+                    text = page.get_text("text").strip()
+                    if text:
+                        md_parts.append(text)
+                        content_list.append({"type": "text", "text": text, "page": page_num})
 
-                # Extract images
-                for img_idx, img_info in enumerate(page.get_images(full=True)):
-                    try:
-                        xref = img_info[0]
-                        base_image = doc.extract_image(xref)
-                        img_bytes = base_image["image"]
-                        ext = base_image.get("ext", "png")
-                        img_path = img_dir / f"page{page_num}_img{img_idx}.{ext}"
-                        img_path.write_bytes(img_bytes)
-                        images.append({
-                            "type": "image",
-                            "path": str(img_path),
-                            "page": page_num,
-                            "index": len(images),
-                        })
-                    except Exception as exc:
-                        logger.warning(f"Failed to extract PDF image: {exc}")
-
-            doc.close()
+                    # Extract images
+                    for img_idx, img_info in enumerate(page.get_images(full=True)):
+                        try:
+                            xref = img_info[0]
+                            base_image = doc.extract_image(xref)
+                            img_bytes = base_image["image"]
+                            ext = base_image.get("ext", "png")
+                            img_path = img_dir / f"page{page_num}_img{img_idx}.{ext}"
+                            img_path.write_bytes(img_bytes)
+                            images.append({
+                                "type": "image",
+                                "path": str(img_path),
+                                "page": page_num,
+                                "index": len(images),
+                            })
+                        except Exception as exc:
+                            logger.warning(f"Failed to extract PDF image: {exc}")
+            finally:
+                doc.close()
 
         except ImportError:
             logger.warning("PyMuPDF not installed; attempting pdf2image + OCR fallback")
@@ -1461,31 +1462,32 @@ class MinerUParser:
 
         src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         dst_doc = fitz.open()
+        try:
+            for page_idx in range(len(src_doc)):
+                page = src_doc[page_idx]
+                # Render at 300 DPI
+                mat = fitz.Matrix(300 / 72, 300 / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
 
-        for page_idx in range(len(src_doc)):
-            page = src_doc[page_idx]
-            # Render at 300 DPI
-            mat = fitz.Matrix(300 / 72, 300 / 72)
-            pix = page.get_pixmap(matrix=mat)
-            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+                enhanced = ImagePreprocessor.enhance(img)
 
-            enhanced = ImagePreprocessor.enhance(img)
+                # Encode back to PNG
+                pil_img = Image.fromarray(enhanced)
+                buf = io.BytesIO()
+                pil_img.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
 
-            # Encode back to PNG
-            pil_img = Image.fromarray(enhanced)
-            buf = io.BytesIO()
-            pil_img.save(buf, format="PNG")
-            png_bytes = buf.getvalue()
+                # Insert into new PDF page
+                new_page = dst_doc.new_page(width=page.rect.width, height=page.rect.height)
+                new_page.insert_image(new_page.rect, stream=png_bytes)
 
-            # Insert into new PDF page
-            new_page = dst_doc.new_page(width=page.rect.width, height=page.rect.height)
-            new_page.insert_image(new_page.rect, stream=png_bytes)
-
-        out_buf = io.BytesIO()
-        dst_doc.save(out_buf)
-        dst_doc.close()
-        src_doc.close()
-        return out_buf.getvalue()
+            out_buf = io.BytesIO()
+            dst_doc.save(out_buf)
+            return out_buf.getvalue()
+        finally:
+            dst_doc.close()
+            src_doc.close()
 
     @staticmethod
     def _preprocess_image_bytes(img_bytes: bytes) -> bytes:

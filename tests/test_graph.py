@@ -130,7 +130,7 @@ class TestRouting:
                 {"step_id": "step_001", "status": "completed"},
             ],
         }
-        assert route_after_verify(state) == "execute_step"
+        assert route_after_verify(state) == "prepare_replan"
 
     def test_route_after_verify_max_replan(self):
         state = {

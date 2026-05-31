@@ -42,10 +42,10 @@ Dependencies / 依赖:
 """
 
 import asyncio
+import contextvars
 import copy
 import json
 import operator
-import threading
 import time
 from typing import Annotated, Any, TypedDict
 
@@ -72,27 +72,29 @@ MAX_REPLAN_CYCLES: int = 2
 """Maximum re-plan iterations after failed verification. / 验证失败后最大重规划次数。"""
 
 # Thread-safe runtime context — set by create_agent_graph() before compilation.
-# Replaces module-level globals to avoid conflicts across concurrent graph instances.
+# Uses contextvars for async-safe isolation (threading.local does not protect
+# against interleaved coroutines on the same event loop).
 class _RuntimeContext:
-    """Thread-local storage for tool_registry and llm_client."""
+    """Context-variable storage for tool_registry, llm_client, and config."""
 
-    _local = threading.local()
+    _tools: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("_tools", default={})
+    _llm: contextvars.ContextVar[Any] = contextvars.ContextVar("_llm", default=None)
 
     @classmethod
     def set_tools(cls, tools: dict[str, Any]) -> None:
-        cls._local.tool_registry = tools
+        cls._tools.set(tools)
 
     @classmethod
     def get_tools(cls) -> dict[str, Any]:
-        return getattr(cls._local, "tool_registry", {})
+        return cls._tools.get()
 
     @classmethod
     def set_llm(cls, llm: Any) -> None:
-        cls._local.llm_client = llm
+        cls._llm.set(llm)
 
     @classmethod
     def get_llm(cls) -> Any:
-        return getattr(cls._local, "llm_client", None)
+        return cls._llm.get()
 
 
 # Backward-compatible aliases (kept for any external imports)
@@ -558,7 +560,7 @@ async def execute_step(state: AgentState) -> dict:
     # If a re-plan targeted a specific step index, honour it
     _verification_check: dict | None = state.get("verification_result")
     if _verification_check and "_replan_target_index" in _verification_check:
-        target = _verification_check.pop("_replan_target_index")
+        target = _verification_check.get("_replan_target_index")
         if isinstance(target, int) and plan is not None and 0 <= target < len(plan):
             step_idx = target
             logger.info(_log(state, f"Re-plan: jumping to step index {target}"))
@@ -1206,13 +1208,13 @@ def route_after_error(state: AgentState) -> str:
 
 def route_after_verify(state: AgentState) -> str:
     """
-    Conditional edge after ``verify_result``.
+    Conditional edge after ``verify_result`` — **pure routing only**.
 
-    ``verify_result`` 之后的条件边。
+    ``verify_result`` 之后的条件边（纯路由，不修改 state）。
 
-    If quality score is below threshold and we have not exceeded
-    ``MAX_REPLAN_CYCLES``, re-plan the failing steps and loop back
-    to ``execute_step``.  Otherwise, proceed to ``format_output``.
+    Routes to:
+        - ``prepare_replan`` if verification failed and retries remain
+        - ``format_output``  otherwise
     """
     verification: dict | None = state.get("verification_result")
 
@@ -1234,29 +1236,52 @@ def route_after_verify(state: AgentState) -> str:
     if not retry_steps:
         return "format_output"
 
-    # Re-plan: reset the failing steps in the execution plan
-    # NOTE: We must not mutate state directly in routing functions.
-    # Instead, we mark the plan for re-execution and let execute_step
-    # handle the reset.  The replan metadata is stored in verification_result.
-    plan: list[dict] | None = state.get("execution_plan")
-    if plan:
-        retry_set = set(retry_steps)
-        earliest_idx = None
-        for step in plan:
-            if step["step_id"] in retry_set:
-                step["status"] = "pending"
-                step["retry_count"] = 0
-                logger.info(f"Re-planning step: {step['step_id']}")
-        for i, step in enumerate(plan):
-            if step["step_id"] in retry_set:
-                earliest_idx = i
-                break
-        if earliest_idx is not None:
-            # Store the target index in verification so execute_step can pick it up
-            verification["_replan_target_index"] = earliest_idx
+    # Need to re-plan — route to the prepare_replan node
+    return "prepare_replan"
 
-    verification["_replan_count"] = replan_count + 1
-    return "execute_step"
+
+async def prepare_replan(state: AgentState) -> dict:
+    """
+    Node that prepares a re-plan after failed verification.
+
+    Failed verification 后准备重新执行计划。
+
+    Resets failing steps to ``pending`` and bumps ``_replan_count``.
+    This is a proper LangGraph node (returns state updates) instead of
+    mutating state inside a routing function.
+    """
+    verification: dict | None = state.get("verification_result")
+    plan: list[dict] | None = state.get("execution_plan")
+
+    if verification is None or plan is None:
+        return {"status": "completed"}
+
+    retry_steps = verification.get("retry_steps", [])
+    replan_count = verification.get("_replan_count", 0)
+    retry_set = set(retry_steps)
+
+    earliest_idx = None
+    for step in plan:
+        if step["step_id"] in retry_set:
+            step["status"] = "pending"
+            step["retry_count"] = 0
+            logger.info(f"Re-planning step: {step['step_id']}")
+
+    for i, step in enumerate(plan):
+        if step["step_id"] in retry_set:
+            earliest_idx = i
+            break
+
+    # Update verification metadata via a new dict (proper state update)
+    new_verification = dict(verification)
+    new_verification["_replan_count"] = replan_count + 1
+    if earliest_idx is not None:
+        new_verification["_replan_target_index"] = earliest_idx
+
+    return {
+        "execution_plan": plan,
+        "verification_result": new_verification,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1447,6 +1472,7 @@ def create_agent_graph(
     graph.add_node("execute_step", execute_step)
     graph.add_node("error_handler", error_handler)
     graph.add_node("verify_result", verify_result)
+    graph.add_node("prepare_replan", prepare_replan)
     graph.add_node("format_output", format_output)
 
     # ---- Define edges / 定义边 ----
@@ -1477,15 +1503,18 @@ def create_agent_graph(
         },
     )
 
-    # Conditional after verify: re-plan (back to execute) | pass (to format)
+    # Conditional after verify: re-plan (via prepare_replan) | pass (to format)
     graph.add_conditional_edges(
         "verify_result",
         route_after_verify,
         {
-            "execute_step": "execute_step",
+            "prepare_replan": "prepare_replan",
             "format_output": "format_output",
         },
     )
+
+    # After prepare_replan, loop back to execute_step
+    graph.add_edge("prepare_replan", "execute_step")
 
     # Terminal: format_output -> END
     graph.add_edge("format_output", END)

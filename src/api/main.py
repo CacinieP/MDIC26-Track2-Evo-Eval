@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 import time
@@ -115,13 +116,35 @@ app = FastAPI(
 )
 
 # --- CORS middleware ---
+# Restrict origins via env var API_CORS_ORIGINS (comma-separated).
+# Defaults to ["*"] for development but should be tightened for production.
+_cors_origins_str = os.environ.get("API_CORS_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- API Key authentication middleware ---
+_API_KEY = os.environ.get("API_KEY", "")  # Set to enable auth; empty = disabled
+_PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Optional API key check.  Skipped when API_KEY env var is empty."""
+    if _API_KEY and request.url.path not in _PUBLIC_PATHS:
+        key = request.headers.get("X-API-Key", "")
+        if key != _API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key. Set X-API-Key header."},
+            )
+    return await call_next(request)
 
 
 # --- Request logging middleware ---
@@ -351,9 +374,7 @@ async def _process_task(task_id: str, file_path: str, request: str, options: dic
 
         # Attach verification if present
         if verification:
-            record = task_store.get_task(task_id)
-            if record:
-                record.verification = verification
+            task_store.set_verification(task_id, verification)
 
         logger.info(f"Task {task_id} completed successfully")
 

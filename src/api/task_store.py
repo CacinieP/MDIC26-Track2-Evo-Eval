@@ -9,6 +9,7 @@ Thread-safe dict-based store that tracks:
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 import uuid
@@ -121,9 +122,14 @@ class TaskStore:
         return task_id
 
     def get_task(self, task_id: str) -> TaskRecord | None:
-        """Get a task record by ID."""
+        """Get a **snapshot** (deep copy) of a task record by ID.
+
+        Returning a copy prevents callers from mutating internal state
+        outside the lock, which would cause data races.
+        """
         with self._lock:
-            return self._tasks.get(task_id)
+            task = self._tasks.get(task_id)
+            return copy.deepcopy(task) if task else None
 
     def update_status(self, task_id: str, status: TaskStatus) -> None:
         """Update task status."""
@@ -180,6 +186,14 @@ class TaskStore:
             if task:
                 task.execution_plan = plan
                 task.total_steps = len(plan)
+                self._touch(task)
+
+    def set_verification(self, task_id: str, verification: dict) -> None:
+        """Set task verification result (safe mutation under lock)."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                task.verification = verification
                 self._touch(task)
 
     def add_log(self, task_id: str, message: str) -> None:
