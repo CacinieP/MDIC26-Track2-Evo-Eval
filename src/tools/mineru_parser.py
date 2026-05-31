@@ -142,7 +142,9 @@ class MinerUParser:
         self._ocr_engine: Any | None = None  # Lazy-initialised PaddleOCR singleton
 
         # Cloud API configuration
-        self.api_token = self.config.get("api_token", os.environ.get("MINERU_API_TOKEN", ""))
+        raw_token = self.config.get("api_token", os.environ.get("MINERU_API_TOKEN", ""))
+        # Filter out unresolved env var placeholders like "${MINERU_API_TOKEN}"
+        self.api_token = raw_token if raw_token and not raw_token.startswith("${") else ""
         self.api_mode = self.config.get("api_mode", "auto")  # auto | cloud | local
 
         if self._mineru_available:

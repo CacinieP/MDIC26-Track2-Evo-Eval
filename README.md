@@ -97,6 +97,45 @@ cp configs/config.example.yaml configs/config.yaml
 # 编辑 config.yaml 填入 API keys（可选，不填则使用启发式模式）
 ```
 
+### 部署模式
+
+系统支持 **两种部署模式**，可根据硬件条件和场景灵活选择：
+
+| 对比维度 | 🔧 端侧部署（本地 GPU） | ☁️ 云侧部署（MinerU API） |
+|----------|------------------------|--------------------------|
+| **模型推理** | 本地 MinerU 模型（~1.5GB） | MinerU 云端 API |
+| **硬件要求** | GPU 推荐（CUDA 11.8+），CPU 可用 | 仅需网络，无 GPU 要求 |
+| **延迟** | 25-30 页/秒（GPU） | 3-10s/页（网络+排队） |
+| **文件限制** | 无硬限制 | 精准 API: ≤200MB/200页 |
+| **成本** | 免费（本地算力） | 免费 1000 页/天（需 Token） |
+| **表格识别** | ✅ 完整支持 | ✅ VLM 模型，高精度 |
+| **公式识别** | ✅ 完整支持 | ✅ 完整支持 |
+| **离线可用** | ✅ | ❌ |
+
+**端侧部署**（默认，有 GPU 时推荐）：
+```bash
+# 下载 MinerU 模型（约 1.5GB）
+mineru-models-download -s modelscope -m pipeline
+
+# 启动服务
+python main.py serve --port 8000
+```
+
+**云侧部署**（无 GPU 或快速验证时推荐）：
+```bash
+# 方式1: 设置环境变量（推荐，不暴露 Token 到代码）
+export MINERU_API_TOKEN="你的Token"  # 去 mineru.net 申请
+
+# 方式2: 写入 config.yaml（已被 .gitignore 忽略）
+# mineru:
+#   api_token: "你的Token"
+
+# 启动服务 — 自动检测本地模型，不可用时走云端
+python main.py serve --port 8000
+```
+
+**免 Token 轻量模式**：不设 Token 时自动使用 Agent 轻量 API（免登录，≤10MB/≤20页），适合快速测试。
+
 ### 运行
 
 ```bash
