@@ -35,6 +35,13 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+# Load .env into os.environ before config is read
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(_PROJECT_ROOT) / ".env")
+except ImportError:
+    pass
+
 from src.api.task_store import TaskStore, TaskStatus, TaskRecord
 from src.tools.mineru_parser import MinerUParser
 from src.tools.table_parser import TableParser

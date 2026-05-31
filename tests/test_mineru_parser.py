@@ -478,3 +478,188 @@ class TestTableToMarkdown:
         body_line = lines[2]
         # 3 columns => 4 delimiters: "| 1 | 2 |  |"
         assert body_line.count("|") == 4
+
+
+# ===================================================================
+# 9. PDF auto-split for Precise API (>200 pages)
+# ===================================================================
+
+
+class TestPdfAutoSplit:
+    """Test _count_pdf_pages, _split_pdf, and _cloud_precise_split."""
+
+    def test_count_pdf_pages_real(self, tmp_path):
+        """Count pages of a real multi-page PDF created with fitz."""
+        fitz = pytest.importorskip("fitz", reason="PyMuPDF required for split tests")
+        doc = fitz.open()
+        for _ in range(5):
+            doc.new_page(width=72, height=72)
+        pdf_path = tmp_path / "five.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+        assert MinerUParser._count_pdf_pages(pdf_path) == 5
+
+    def test_count_pdf_pages_missing_file(self):
+        """Should return 0 for a file that can't be opened."""
+        assert MinerUParser._count_pdf_pages(Path("/nonexistent/file.pdf")) == 0
+
+    def test_split_pdf_produces_correct_chunks(self, tmp_path):
+        """Split a 5-page PDF into chunks of 2 — should produce 3 files."""
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        for i in range(5):
+            page = doc.new_page(width=72, height=72)
+            page.insert_text((10, 30), f"Page {i+1}")
+        pdf_path = tmp_path / "five_pages.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        parser = MinerUParser()
+        chunks = parser._split_pdf(pdf_path, chunk_size=2)
+
+        assert len(chunks) == 3  # [1-2], [3-4], [5]
+
+        # Verify each chunk has the right page count
+        for chunk_path in chunks:
+            chunk_doc = fitz.open(str(chunk_path))
+            if "part1" in chunk_path.stem:
+                assert len(chunk_doc) == 2
+            elif "part2" in chunk_path.stem:
+                assert len(chunk_doc) == 2
+            elif "part3" in chunk_path.stem:
+                assert len(chunk_doc) == 1
+            chunk_doc.close()
+
+    def test_split_pdf_no_split_needed(self, tmp_path):
+        """A PDF with ≤chunk_size pages should produce a single chunk."""
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        doc.new_page(width=72, height=72)
+        pdf_path = tmp_path / "single.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        parser = MinerUParser()
+        chunks = parser._split_pdf(pdf_path, chunk_size=200)
+        assert len(chunks) == 1
+
+    @pytest.mark.asyncio
+    async def test_cloud_precise_split_merges_results(self, tmp_path):
+        """_cloud_precise_split should merge markdown and tables from all chunks."""
+        parser = MinerUParser({"api_token": "test-token"})
+
+        # Create a 5-page PDF, split with chunk_size=3 → [1-3], [4-5]
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        for i in range(5):
+            doc.new_page(width=72, height=72)
+        pdf_path = tmp_path / "five.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        # Mock _split_pdf to use chunk_size=3 instead of 200
+        chunks = parser._split_pdf(pdf_path, chunk_size=3)
+        assert len(chunks) == 2
+
+        # Mock _cloud_precise_api to return controlled results
+        chunk_results = [
+            {
+                "source_file": "chunk1",
+                "pages": 3,
+                "content_list": [{"type": "text", "text": "chunk1 text", "page": 0}],
+                "markdown": "# Chunk 1",
+                "tables": [{"type": "table", "data": [[1]], "page": 2}],
+                "images": [],
+                "metadata": {"parser": "mineru_cloud_precise", "api_batch_id": "b1"},
+            },
+            {
+                "source_file": "chunk2",
+                "pages": 2,
+                "content_list": [{"type": "text", "text": "chunk2 text", "page": 0}],
+                "markdown": "# Chunk 2",
+                "tables": [{"type": "table", "data": [[2]], "page": 0}],
+                "images": [],
+                "metadata": {"parser": "mineru_cloud_precise", "api_batch_id": "b2"},
+            },
+        ]
+
+        async def mock_precise(path, name, suffix):
+            idx = mock_precise.call_count
+            mock_precise.call_count += 1
+            return chunk_results[idx] if idx < len(chunk_results) else None
+
+        mock_precise.call_count = 0
+
+        # Patch _split_pdf to return our 2 chunks and _cloud_precise_api for results
+        with patch.object(parser, "_split_pdf", return_value=chunks), \
+             patch.object(parser, "_cloud_precise_api", side_effect=mock_precise):
+            result = await parser._cloud_precise_split(pdf_path, "five.pdf", 5)
+
+        assert result is not None
+        assert result["pages"] == 5
+        assert "# Chunk 1" in result["markdown"]
+        assert "# Chunk 2" in result["markdown"]
+        assert len(result["tables"]) == 2
+        # Page offset should be applied to chunk 2
+        assert result["tables"][1]["page"] == 3  # 0 + 3 pages offset
+        assert result["content_list"][1]["page"] == 3  # chunk2 text offset by 3
+        assert result["metadata"]["parser"] == "mineru_cloud_precise_split"
+        assert result["metadata"]["total_pages"] == 5
+
+    @pytest.mark.asyncio
+    async def test_parse_via_cloud_api_routes_to_split(self, tmp_path):
+        """_parse_via_cloud_api should call _cloud_precise_split for >200 pages."""
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        for _ in range(201):
+            doc.new_page(width=72, height=72)
+        pdf_path = tmp_path / "big.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        parser = MinerUParser({"api_token": "test-token", "api_mode": "cloud"})
+
+        mock_split_result = {
+            "source_file": str(pdf_path),
+            "pages": 201,
+            "content_list": [],
+            "markdown": "merged",
+            "tables": [],
+            "images": [],
+            "metadata": {"parser": "mineru_cloud_precise_split"},
+        }
+
+        with patch.object(parser, "_cloud_precise_split", new_callable=AsyncMock, return_value=mock_split_result):
+            result = await parser._parse_via_cloud_api(pdf_path)
+
+        assert result is not None
+        assert result["metadata"]["parser"] == "mineru_cloud_precise_split"
+
+    @pytest.mark.asyncio
+    async def test_parse_via_cloud_api_no_split_under_200(self, tmp_path):
+        """_parse_via_cloud_api should NOT split for ≤200 pages."""
+        fitz = pytest.importorskip("fitz")
+        doc = fitz.open()
+        for _ in range(50):
+            doc.new_page(width=72, height=72)
+        pdf_path = tmp_path / "small.pdf"
+        doc.save(str(pdf_path))
+        doc.close()
+
+        parser = MinerUParser({"api_token": "test-token", "api_mode": "cloud"})
+
+        mock_result = {
+            "source_file": str(pdf_path),
+            "pages": 50,
+            "content_list": [],
+            "markdown": "no split",
+            "tables": [],
+            "images": [],
+            "metadata": {"parser": "mineru_cloud_precise"},
+        }
+
+        with patch.object(parser, "_cloud_precise_api", new_callable=AsyncMock, return_value=mock_result):
+            result = await parser._parse_via_cloud_api(pdf_path)
+
+        assert result is not None
+        assert result["metadata"]["parser"] == "mineru_cloud_precise"

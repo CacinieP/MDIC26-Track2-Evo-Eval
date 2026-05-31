@@ -23,6 +23,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env into os.environ before anything else reads config
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
 
 def cmd_serve(args):
     """Start the FastAPI API server."""

@@ -227,27 +227,37 @@ class MinerUParser:
         logger.info(f"MinerUParser.execute | file={file_path.name}  suffix={suffix}  preprocess={preprocess}")
 
         # Route to the appropriate handler
-        try:
-            if suffix in _PDF_EXTS:
-                result = await self._handle_pdf(file_path, preprocess)
-            elif suffix in _IMAGE_EXTS:
-                result = await self._handle_image(file_path, preprocess)
-            elif suffix in _OFFICE_EXTS:
-                result = await self._handle_office(file_path)
-            elif suffix in _HTML_EXTS:
-                result = await self._handle_html(file_path)
-            else:
-                raise ValueError(f"Unhandled suffix: {suffix}")
-        except Exception as exc:
-            logger.error(f"MinerUParser primary handler failed for {file_path.name}: {exc}")
-
-            # Try MinerU cloud API before falling back to basic parsers
+        # When api_mode is "cloud", skip local processing entirely
+        if self.api_mode == "cloud":
+            logger.info(f"api_mode=cloud, routing directly to cloud API for {file_path.name}")
             cloud_result = await self._parse_via_cloud_api(file_path)
             if cloud_result is not None:
                 result = cloud_result
             else:
-                logger.info("Cloud API unavailable or failed — falling back to basic parsers")
+                logger.info("Cloud API unavailable — falling back to basic parsers")
                 result = await self._fallback_parse(file_path)
+        else:
+            try:
+                if suffix in _PDF_EXTS:
+                    result = await self._handle_pdf(file_path, preprocess)
+                elif suffix in _IMAGE_EXTS:
+                    result = await self._handle_image(file_path, preprocess)
+                elif suffix in _OFFICE_EXTS:
+                    result = await self._handle_office(file_path)
+                elif suffix in _HTML_EXTS:
+                    result = await self._handle_html(file_path)
+                else:
+                    raise ValueError(f"Unhandled suffix: {suffix}")
+            except Exception as exc:
+                logger.error(f"MinerUParser primary handler failed for {file_path.name}: {exc}")
+
+                # Try MinerU cloud API before falling back to basic parsers
+                cloud_result = await self._parse_via_cloud_api(file_path)
+                if cloud_result is not None:
+                    result = cloud_result
+                else:
+                    logger.info("Cloud API unavailable or failed — falling back to basic parsers")
+                    result = await self._fallback_parse(file_path)
 
         elapsed = time.perf_counter() - t0
         result["metadata"]["parse_time_s"] = round(elapsed, 3)
@@ -977,6 +987,9 @@ class MinerUParser:
         - Agent lightweight API (no token, ≤10MB/≤20 pages, Markdown only)
         - Precise API (with token, ≤200MB/≤200 pages, Zip with MD+JSON)
 
+        For PDFs exceeding 200 pages, automatically splits into ≤200-page chunks,
+        processes each chunk via Precise API, then merges the results.
+
         Returns structured dict on success, None on failure.
         """
         import requests as sync_requests
@@ -1004,6 +1017,12 @@ class MinerUParser:
 
         try:
             if use_precise:
+                # Check page count for PDFs — split if > 200 pages
+                if suffix == ".pdf":
+                    page_count = self._count_pdf_pages(file_path)
+                    if page_count > 200:
+                        return await self._cloud_precise_split(file_path, file_name, page_count)
+
                 return await self._cloud_precise_api(file_path, file_name, suffix)
             elif use_agent:
                 return await self._cloud_agent_api(file_path, file_name, suffix)
@@ -1012,6 +1031,133 @@ class MinerUParser:
         except Exception as exc:
             logger.error(f"MinerU cloud API failed: {exc}")
             return None
+
+    @staticmethod
+    def _count_pdf_pages(file_path: Path) -> int:
+        """Count PDF pages using PyMuPDF (fitz)."""
+        try:
+            import fitz
+            doc = fitz.open(str(file_path))
+            n = len(doc)
+            doc.close()
+            return n
+        except Exception:
+            return 0
+
+    def _split_pdf(self, file_path: Path, chunk_size: int = 200) -> list[Path]:
+        """Split a PDF into chunks of ≤chunk_size pages, return temp file paths."""
+        import fitz
+        import tempfile
+
+        doc = fitz.open(str(file_path))
+        total = len(doc)
+        chunks: list[Path] = []
+        tmp_dir = Path(tempfile.mkdtemp(prefix="mineru_split_"))
+
+        for start in range(0, total, chunk_size):
+            end = min(start + chunk_size, total)
+            chunk_doc = fitz.open()
+            chunk_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
+            chunk_path = tmp_dir / f"{file_path.stem}_part{len(chunks)+1}_{start+1}-{end}.pdf"
+            chunk_doc.save(str(chunk_path))
+            chunk_doc.close()
+            chunks.append(chunk_path)
+            logger.info(f"Split chunk {len(chunks)}: pages {start+1}-{end} ({chunk_path.name})")
+
+        doc.close()
+        logger.info(f"Split {file_path.name} into {len(chunks)} chunks")
+        return chunks
+
+    async def _cloud_precise_split(self, file_path: Path, file_name: str, total_pages: int) -> dict | None:
+        """Split a large PDF, process each chunk via Precise API, merge results."""
+        import shutil
+
+        logger.info(f"PDF has {total_pages} pages (>200), splitting into chunks")
+
+        chunks = self._split_pdf(file_path, chunk_size=200)
+        if not chunks:
+            logger.error("PDF split produced no chunks")
+            return None
+
+        all_md_parts: list[str] = []
+        all_content_list: list[dict] = []
+        all_tables: list[dict] = []
+        all_images: list[dict] = []
+        total_pages_parsed = 0
+        batch_ids: list[str] = []
+        page_offset = 0
+
+        try:
+            for i, chunk_path in enumerate(chunks, 1):
+                logger.info(f"Processing chunk {i}/{len(chunks)}: {chunk_path.name}")
+                result = await self._cloud_precise_api(
+                    chunk_path, chunk_path.name, ".pdf"
+                )
+                if result is None:
+                    logger.warning(f"Chunk {i} failed, skipping")
+                    continue
+
+                md = result.get("markdown", "")
+                if md:
+                    all_md_parts.append(md)
+
+                # Adjust page numbers in content_list
+                for item in result.get("content_list", []):
+                    if "page" in item:
+                        item["page"] = item["page"] + page_offset
+                    all_content_list.append(item)
+
+                # Adjust table page references
+                for tbl in result.get("tables", []):
+                    if "page" in tbl:
+                        tbl["page"] = tbl["page"] + page_offset
+                    all_tables.append(tbl)
+
+                all_images.extend(result.get("images", []))
+                total_pages_parsed += result.get("pages", 0)
+                page_offset += result.get("pages", 0)
+
+                bid = result.get("metadata", {}).get("api_batch_id", "")
+                if bid:
+                    batch_ids.append(bid)
+
+                logger.info(
+                    f"Chunk {i} done: {result.get('pages', 0)} pages, "
+                    f"{len(md)} chars, {len(result.get('tables', []))} tables"
+                )
+        finally:
+            # Clean up temp split files
+            try:
+                shutil.rmtree(chunks[0].parent, ignore_errors=True)
+            except Exception:
+                pass
+
+        if not all_md_parts:
+            logger.error("All chunks failed — no results")
+            return None
+
+        merged_md = "\n\n---\n\n".join(all_md_parts)
+        logger.info(
+            f"Split processing complete: {total_pages_parsed}/{total_pages} pages, "
+            f"{len(merged_md)} chars, {len(all_tables)} tables from {len(batch_ids)} batches"
+        )
+
+        return {
+            "source_file": str(file_path),
+            "pages": total_pages_parsed,
+            "content_list": all_content_list,
+            "markdown": merged_md,
+            "tables": all_tables,
+            "images": all_images,
+            "metadata": {
+                "file_name": file_name,
+                "file_size": file_path.stat().st_size,
+                "parser": "mineru_cloud_precise_split",
+                "api_batch_ids": batch_ids,
+                "total_chunks": len(chunks),
+                "total_pages": total_pages,
+            },
+        }
 
     async def _cloud_agent_api(self, file_path: Path, file_name: str, suffix: str) -> dict | None:
         """Use the Agent lightweight API (no token, file upload mode)."""
@@ -1206,7 +1352,12 @@ class MinerUParser:
         extract_fn = None,
         has_token: bool = False,
     ) -> str | None:
-        """Poll a cloud API until done, return the extracted URL or None."""
+        """Poll a cloud API until done, return the extracted URL or None.
+
+        Handles two response shapes:
+        - Agent API:  state at ``data.state``
+        - Batch API:  state at ``data.extract_result[0].state``
+        """
         import requests as sync_requests
         import asyncio
 
@@ -1216,7 +1367,7 @@ class MinerUParser:
 
         loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
-        interval = 3
+        interval = 5
 
         while time.perf_counter() - t0 < timeout:
             resp = await loop.run_in_executor(
@@ -1224,7 +1375,18 @@ class MinerUParser:
                 lambda: sync_requests.get(poll_url, headers=headers, timeout=30)
             )
             result = resp.json()
-            state = result.get("data", {}).get("state", "unknown")
+            data = result.get("data", {})
+
+            # --- resolve state from either response shape ---
+            state = data.get("state")
+            if not state:
+                # Batch (Precise) API: state is nested inside extract_result
+                extract_result = data.get("extract_result")
+                if isinstance(extract_result, list) and extract_result:
+                    state = extract_result[0].get("state", "unknown")
+                else:
+                    state = "unknown"
+
             elapsed = int(time.perf_counter() - t0)
 
             if state == "done":
@@ -1236,12 +1398,15 @@ class MinerUParser:
                 return None
 
             if state == "failed":
-                err = result.get("data", {}).get("err_msg", "unknown error")
-                logger.error(f"[{elapsed}s] Cloud parse failed: {err}")
+                err_msg = (
+                    data.get("err_msg")
+                    or data.get("extract_result", [{}])[0].get("err_msg", "unknown error")
+                )
+                logger.error(f"[{elapsed}s] Cloud parse failed: {err_msg}")
                 return None
 
-            # Still processing
-            progress = result.get("data", {}).get("extract_progress", {})
+            # Still processing — try to show progress
+            progress = data.get("extract_progress") or {}
             if progress:
                 logger.info(
                     f"[{elapsed}s] {state}: "
