@@ -1239,32 +1239,45 @@ class _BuiltinVerifier:
 
     async def execute(self, params: dict, context: dict | None = None) -> dict:
         issues: list[str] = []
-        score = 0.80  # Baseline
+        score = 0.0
 
         context = context or {}
-
-        # 1. Check content existence
         content_list = context.get("content_list")
         markdown = context.get("markdown", "")
-        if (not content_list or len(content_list) == 0) and not markdown.strip():
-            issues.append("No content extracted from document")
-            score -= 0.4
+        tables = context.get("tables", [])
+        images = context.get("images", [])
 
-        # 2. Check page coverage
+        # 1. Content existence (0-0.3)
+        has_content = bool(content_list and len(content_list) > 0) or bool(markdown.strip())
+        if has_content:
+            score += 0.15
+            if markdown and len(markdown) > 100:
+                score += min(0.1, len(markdown) / 200000)
+            if content_list:
+                score += min(0.05, len(content_list) * 0.0002)
+        else:
+            issues.append("No content extracted from document")
+
+        # 2. Page coverage (0-0.15)
         pages = context.get("pages", 0)
         if pages and pages > 0:
             md_len = len(markdown)
             if md_len < pages * 10:  # Less than ~10 chars per page is suspicious
                 issues.append(f"Markdown output suspiciously short for {pages} pages ({md_len} chars)")
-                score -= 0.1
+            else:
+                score += min(0.15, pages * 0.002)
 
-        # 3. Check table extraction (when relevant)
-        tables = context.get("tables", [])
+        # 3. Table extraction (0-0.2)
+        if tables and len(tables) > 0:
+            score += min(0.1, len(tables) * 0.02)
         if params.get("verify_numeric") and not tables:
             issues.append("Financial task but no tables extracted")
-            score -= 0.15
 
-        # 4. Check for previous errors
+        # 4. Image/figure extraction bonus (0-0.05)
+        if images and len(images) > 0:
+            score += min(0.05, len(images) * 0.005)
+
+        # 5. Check for previous errors (penalty)
         prev_results = context.get("previous_results", [])
         failed_steps = sum(1 for r in prev_results if isinstance(r, dict) and r.get("status") == "failed")
         if failed_steps > 0:

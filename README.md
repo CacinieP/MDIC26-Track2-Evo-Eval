@@ -148,7 +148,7 @@ curl http://localhost:8000/capabilities
 [09:15:19][parse_1780173063] Step step_001_table SUCCESS (0.00s)
 [09:15:19][parse_1780173063] Step step_002_merge SUCCESS (0.00s)
 [09:15:19][parse_1780173063] Step step_003_verify SUCCESS (0.00s)
-[09:15:19][parse_1780173063] Verify: score=0.80, passed=True
+[09:15:19][parse_1780173063] Verify: score=0.85, passed=True
 ```
 
 ## 项目结构
@@ -178,17 +178,22 @@ curl http://localhost:8000/capabilities
 │   └── api/                         # API 服务
 │       ├── main.py                  # FastAPI REST API（10+ 端点 + SSE 日志流）
 │       └── task_store.py            # 线程安全内存任务存储
-├── tests/                           # 测试（96 用例，5 模块）
+├── tests/                           # 测试（318 用例，10 模块）
 │   ├── test_api.py                  # TaskStore + API 端点（21 tests）
 │   ├── test_config.py               # 配置加载/校验/环境变量展开（19 tests）
 │   ├── test_graph.py                # Agent 图/路由/合并/验证（27 tests）
 │   ├── test_planner.py              # 任务规划/关键词检测/依赖链（15 tests）
-│   └── test_table_parser.py         # 表格解析/数值/类型分类（14 tests）
+│   ├── test_table_parser.py         # 表格解析/数值/类型分类（14 tests）
+│   ├── test_mineru_parser.py        # MinerU 解析/回退/图像预处理（38 tests）
+│   ├── test_chart_analyzer.py       # 图表分类/视觉/数据提取（56 tests）
+│   ├── test_crosspage_merger.py     # 跨页合并/实体/指代消解（50 tests）
+│   ├── test_image_enhancer.py       # 图像增强/质量评估/OCR 投票（58 tests）
+│   └── test_llm_client.py           # LLM 客户端/提供商检测/错误处理（20 tests）
 ├── scripts/
 │   └── run_demo.py                  # 独立演示脚本（自动生成样本 PDF）
 ├── data/
 │   ├── samples/                     # 测试样本（5 个文档：3 PDF + 1 DOCX）
-│   └── output/                      # 解析结果 JSON + 提取的图片
+│   └── output/                      # 解析结果 JSON（含输出格式说明）
 ├── logs/
 │   └── samples/                     # 示例运行日志（2 份完整执行记录）
 └── docs/

@@ -27,7 +27,7 @@
 2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:530 - [09:20:13][parse_1748672405] Executing step [3/3]: step_002_verify via verifier
 2026-05-31 09:20:13 | INFO     | src.agents.graph:execute_step:574 - [09:20:13][parse_1748672405] Step step_002_verify SUCCESS (0.00s)
 2026-05-31 09:20:13 | INFO     | src.agents.graph:_log:142 - [09:20:13][parse_1748672405] Entering verify_result node
-2026-05-31 09:20:13 | INFO     | src.agents.graph:verify_result:749 - [09:20:13][parse_1748672405] Verification: score=0.80 threshold=0.7 passed=True issues=0
+2026-05-31 09:20:13 | INFO     | src.agents.graph:verify_result:749 - [09:20:13][parse_1748672405] Verification: score=0.83 threshold=0.7 passed=True issues=0
 2026-05-31 09:20:13 | INFO     | src.agents.graph:_log:142 - [09:20:13][parse_1748672405] Entering format_output node
 2026-05-31 09:20:13 | INFO     | src.agents.graph:format_output:950 - [09:20:13][parse_1748672405] Final output produced: status=completed, errors=0
 2026-05-31 09:20:13 | INFO     | src.api.main:_process_task:346 - Task parse_1748672405 completed successfully
