@@ -423,7 +423,7 @@ TOTAL ASSETS               3,580,246,791.35    3,222,222,221.11    +11.11%
 ### A. 仓库结构
 
 ```
-MIDC26-Track2-Evo-Eval/
+MDIC26-Track2-Evo-Eval/
 ├── main.py                          # CLI 入口 (serve/parse/batch/demo)
 ├── requirements.txt                 # Python 依赖
 ├── pytest.ini                       # 测试配置 (318 tests, asyncio auto)

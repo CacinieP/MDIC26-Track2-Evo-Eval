@@ -160,8 +160,8 @@ loguru >= 0.7.0             # 日志
 ### 4.1 克隆代码仓库
 
 ```bash
-git clone https://github.com/CacinieP/MIDC26-Track2-Evo-Eval.git
-cd MIDC26-Track2-Evo-Eval
+git clone https://github.com/CacinieP/MDIC26-Track2-Evo-Eval.git
+cd MDIC26-Track2-Evo-Eval
 ```
 
 ### 4.2 创建 Conda 环境
@@ -1055,7 +1055,7 @@ pipeline:
 ## 10. Directory Structure / 目录结构说明
 
 ```
-MIDC26-Track2-Evo-Eval/
+MDIC26-Track2-Evo-Eval/
 ├── main.py                          # 主入口: CLI 命令分发 (serve/parse/batch/demo)
 ├── requirements.txt                 # Python 依赖清单
 ├── README.md                        # 项目概述
@@ -1143,8 +1143,8 @@ MIDC26-Track2-Evo-Eval/
 
 ```bash
 # 1. 克隆代码
-git clone https://github.com/CacinieP/MIDC26-Track2-Evo-Eval.git
-cd MIDC26-Track2-Evo-Eval
+git clone https://github.com/CacinieP/MDIC26-Track2-Evo-Eval.git
+cd MDIC26-Track2-Evo-Eval
 
 # 2. 创建环境
 conda create -n mineru-agent python=3.10 -y && conda activate mineru-agent

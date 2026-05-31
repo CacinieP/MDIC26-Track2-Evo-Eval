@@ -79,8 +79,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/CacinieP/MIDC26-Track2-Evo-Eval.git
-cd MIDC26-Track2-Evo-Eval
+git clone https://github.com/CacinieP/MDIC26-Track2-Evo-Eval.git
+cd MDIC26-Track2-Evo-Eval
 
 # 创建虚拟环境
 conda create -n mineru-agent python=3.10 -y
