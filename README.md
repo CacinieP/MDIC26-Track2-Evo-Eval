@@ -238,10 +238,7 @@ curl http://localhost:8000/capabilities
 └── docs/
     ├── technical-report.md          # 竞赛技术报告
     ├── deployment.md                # 部署与运行文档（1173 行）
-    └── demo/                        # 演示材料
-        ├── demo-video.mp4           # 演示视频（2m40s）
-        ├── slides.html              # HTML 幻灯片（8 slides）
-        └── audio/                   # MiniMax TTS 旁白（8 段）
+    └── demo/                        # Demo 输出结果
 ```
 
 ## 技术栈

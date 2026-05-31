@@ -555,10 +555,7 @@ MDIC26-Track2-Evo-Eval/
 └── docs/
     ├── technical-report.md          # 本文件
     ├── deployment.md                # 部署文档 (1173行)
-    └── demo/                        # 演示材料
-        ├── demo-video.mp4           # 演示视频 (2m40s)
-        ├── slides.html              # HTML幻灯片 (8 slides)
-        └── audio/                   # MiniMax TTS旁白
+    └── demo/                        # Demo 输出结果
 ```
 
 ### B. API 端点列表
