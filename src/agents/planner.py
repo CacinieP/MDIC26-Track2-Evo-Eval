@@ -203,46 +203,6 @@ Return JSON with:
         logger.info(f"Created plan {task_id} with {len(subtasks)} subtasks")
         return plan
 
-    async def execute_plan(self, plan: ExecutionPlan) -> dict:
-        """Execute an execution plan step by step."""
-        plan.status = TaskStatus.RUNNING
-        results = {}
-
-        for subtask in plan.subtasks:
-            # Wait for dependencies
-            for dep_id in subtask.dependencies:
-                dep = next((s for s in plan.subtasks if s.task_id == dep_id), None)
-                if dep and dep.status != TaskStatus.COMPLETED:
-                    subtask.status = TaskStatus.FAILED
-                    subtask.error = f"Dependency {dep_id} not completed"
-                    continue
-
-            subtask.status = TaskStatus.RUNNING
-            subtask.started_at = time.time()
-
-            try:
-                tool = self._tool_registry.get(subtask.tool_name)
-                if not tool:
-                    raise ValueError(f"Tool not found: {subtask.tool_name}")
-
-                result = await tool.execute(subtask.params, context=results)
-                subtask.result = result
-                subtask.status = TaskStatus.COMPLETED
-                results[subtask.task_id] = result
-                logger.info(f"Completed subtask {subtask.task_id}")
-
-            except Exception as e:
-                subtask.error = str(e)
-                subtask.status = TaskStatus.FAILED
-                logger.error(f"Subtask {subtask.task_id} failed: {e}")
-                # TODO: retry logic
-
-            finally:
-                subtask.completed_at = time.time()
-
-        plan.status = TaskStatus.COMPLETED
-        return results
-
     def _heuristic_analysis(self, request: str, file_info: dict | None) -> dict:
         """Fallback heuristic analysis when LLM is unavailable."""
         task_types = ["document_parse"]

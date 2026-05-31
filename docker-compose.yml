@@ -1,0 +1,85 @@
+# =============================================================================
+# Docker Compose for MinerU DataAgent (MDIC26-Track2-Evo-Eval)
+# =============================================================================
+# Usage:
+#   docker compose up --build       # Build and start
+#   docker compose up -d            # Start in background
+#   docker compose down             # Stop and remove
+#   docker compose logs -f          # Follow logs
+# =============================================================================
+
+services:
+  mineru-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mineru-dataagent:latest
+    container_name: mineru-dataagent
+    restart: unless-stopped
+
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+
+    environment:
+      # LLM API Keys (optional — heuristic mode works without them)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+
+      # MinerU Cloud API (optional — auto-fallback to local models when empty)
+      - MINERU_API_TOKEN=${MINERU_API_TOKEN:-}
+      - MINERU_API_MODE=${MINERU_API_MODE:-auto}
+
+      # Python / CUDA settings
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+      # HuggingFace cache (for model downloads)
+      - HF_HOME=/app/.cache/huggingface
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-0}
+
+    volumes:
+      # Mount host output directory for persistent results
+      - ./data/output:/app/data/output
+      # Mount host logs directory
+      - ./logs:/app/logs
+      # Mount local model cache (optional — speeds up cold start)
+      - ./models:/app/models:ro
+      # Mount config (optional — override baked-in config)
+      - ./configs/config.yaml:/app/configs/config.yaml:ro
+
+    # GPU support (requires NVIDIA Container Toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+    networks:
+      - mineru-net
+
+  # Optional: Redis for future persistent task queue (currently commented out)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: mineru-redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - mineru-net
+
+networks:
+  mineru-net:
+    driver: bridge
+
+volumes:
+  redis-data:

@@ -19,6 +19,7 @@ import shutil
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -53,6 +54,51 @@ from src.utils.logger import setup_logging
 from src.utils.config import load_config, get_default_config
 
 # ---------------------------------------------------------------------------
+# Lifespan (startup / shutdown)
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize tools, agent graph, and directories on startup."""
+    global _agent_graph, _config, _temp_dir, _tools_loaded
+
+    setup_logging({"level": "INFO"})
+
+    _config = load_config()
+    _temp_dir = Path(_config.get("storage", {}).get("temp_dir", "./data/temp"))
+    _temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure output dir exists too
+    output_dir = Path(_config.get("storage", {}).get("output_dir", "./data/output"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize individual tool instances
+    mineru_cfg = _config.get("mineru", {})
+    tools = {
+        "mineru_parser": MinerUParser(mineru_cfg),
+        "table_parser": TableParser(),
+        "chart_analyzer": ChartAnalyzer(),
+        "image_enhancer": ImageEnhancer(),
+        "cross_page_merger": CrossPageMerger(),
+        "verifier": _BuiltinVerifier(),
+        "exporter": _BuiltinExporter(),
+    }
+    _tools_loaded = sorted(tools.keys())
+
+    try:
+        _agent_graph = create_agent_graph(tool_registry=tools, config=_config.get("pipeline"))
+        logger.info(f"API startup: agent graph ready with tools: {_tools_loaded}")
+    except Exception as e:
+        logger.error(f"API startup: failed to initialize agent graph: {e}")
+        _agent_graph = None
+
+    logger.info("MinerU DataAgent API server started")
+    yield
+    # Shutdown logic can be added here in the future
+    logger.info("MinerU DataAgent API server shutting down")
+
+
+# ---------------------------------------------------------------------------
 # App & globals
 # ---------------------------------------------------------------------------
 
@@ -65,6 +111,7 @@ app = FastAPI(
         "Competition Track 2 | MinerU"
     ),
     version=VERSION,
+    lifespan=lifespan,
 )
 
 # --- CORS middleware ---
@@ -117,48 +164,6 @@ SUPPORTED_EXTENSIONS = {
     ".docx", ".pptx", ".html", ".htm",
 }
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
-
-
-# ---------------------------------------------------------------------------
-# Startup / Shutdown
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def startup():
-    """Initialize tools, agent graph, and directories on startup."""
-    global _agent_graph, _config, _temp_dir, _tools_loaded
-
-    setup_logging({"level": "INFO"})
-
-    _config = load_config()
-    _temp_dir = Path(_config.get("storage", {}).get("temp_dir", "./data/temp"))
-    _temp_dir.mkdir(parents=True, exist_ok=True)
-
-    # Ensure output dir exists too
-    output_dir = Path(_config.get("storage", {}).get("output_dir", "./data/output"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize individual tool instances
-    mineru_cfg = _config.get("mineru", {})
-    tools = {
-        "mineru_parser": MinerUParser(mineru_cfg),
-        "table_parser": TableParser(),
-        "chart_analyzer": ChartAnalyzer(),
-        "image_enhancer": ImageEnhancer(),
-        "cross_page_merger": CrossPageMerger(),
-        "verifier": _BuiltinVerifier(),
-        "exporter": _BuiltinExporter(),
-    }
-    _tools_loaded = sorted(tools.keys())
-
-    try:
-        _agent_graph = create_agent_graph(tool_registry=tools, config=_config.get("pipeline"))
-        logger.info(f"API startup: agent graph ready with tools: {_tools_loaded}")
-    except Exception as e:
-        logger.error(f"API startup: failed to initialize agent graph: {e}")
-        _agent_graph = None
-
-    logger.info("MinerU DataAgent API server started")
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ import asyncio
 import copy
 import json
 import operator
+import threading
 import time
 from typing import Annotated, Any, TypedDict
 
@@ -70,9 +71,31 @@ QUALITY_THRESHOLD: float = 0.7
 MAX_REPLAN_CYCLES: int = 2
 """Maximum re-plan iterations after failed verification. / 验证失败后最大重规划次数。"""
 
-# Module-level runtime context — set by create_agent_graph() before compilation.
-# LangGraph nodes only receive TypedDict state, so we use globals to pass
-# tool_registry and llm_client into node functions.
+# Thread-safe runtime context — set by create_agent_graph() before compilation.
+# Replaces module-level globals to avoid conflicts across concurrent graph instances.
+class _RuntimeContext:
+    """Thread-local storage for tool_registry and llm_client."""
+
+    _local = threading.local()
+
+    @classmethod
+    def set_tools(cls, tools: dict[str, Any]) -> None:
+        cls._local.tool_registry = tools
+
+    @classmethod
+    def get_tools(cls) -> dict[str, Any]:
+        return getattr(cls._local, "tool_registry", {})
+
+    @classmethod
+    def set_llm(cls, llm: Any) -> None:
+        cls._local.llm_client = llm
+
+    @classmethod
+    def get_llm(cls) -> Any:
+        return getattr(cls._local, "llm_client", None)
+
+
+# Backward-compatible aliases (kept for any external imports)
 _RUNTIME_TOOL_REGISTRY: dict[str, Any] = {}
 _RUNTIME_LLM_CLIENT: Any = None
 
@@ -197,7 +220,7 @@ async def analyze_task(state: AgentState) -> dict:
         file_type_hints.append(file_info["type"])
 
     # --- LLM-based analysis (if available) ---
-    llm_client = _RUNTIME_LLM_CLIENT
+    llm_client = _RuntimeContext.get_llm()
     if llm_client is not None:
         try:
             assessment = await _llm_analyze(llm_client, request, file_info, file_type_hints)
@@ -555,7 +578,7 @@ async def execute_step(state: AgentState) -> dict:
     subtask["status"] = "running"
 
     # --- Resolve tool ---
-    tool_registry: dict = _RUNTIME_TOOL_REGISTRY
+    tool_registry: dict = _RuntimeContext.get_tools()
     tool = tool_registry.get(tool_name)
 
     if tool is None:
@@ -1400,6 +1423,9 @@ def create_agent_graph(
     # Set module-level globals so node functions can access tool_registry & LLM.
     # LangGraph TypedDict state cannot carry arbitrary keys, so we use this
     # approach instead of injecting into state.
+    # Update thread-safe context (primary) and module globals (backward compat)
+    _RuntimeContext.set_tools(dict(tool_registry))
+    _RuntimeContext.set_llm(llm_client)
     global _RUNTIME_TOOL_REGISTRY, _RUNTIME_LLM_CLIENT
     _RUNTIME_TOOL_REGISTRY = dict(tool_registry)
     _RUNTIME_LLM_CLIENT = llm_client

@@ -63,6 +63,12 @@ WORKDIR /app
 COPY src/ ./src/
 COPY main.py .
 COPY requirements.txt .
+COPY configs/ ./configs/
+COPY data/ ./data/
+COPY docs/ ./docs/
+COPY logs/ ./logs/
+COPY scripts/ ./scripts/
+COPY pytest.ini .
 
 # Create data directories
 RUN mkdir -p /app/data/output /app/data/temp
