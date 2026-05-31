@@ -228,6 +228,7 @@ class MinerUParser:
 
         # Route to the appropriate handler
         # When api_mode is "cloud", skip local processing entirely
+        result = None
         if self.api_mode == "cloud":
             logger.info(f"api_mode=cloud, routing directly to cloud API for {file_path.name}")
             cloud_result = await self._parse_via_cloud_api(file_path)
@@ -258,6 +259,9 @@ class MinerUParser:
                 else:
                     logger.info("Cloud API unavailable or failed — falling back to basic parsers")
                     result = await self._fallback_parse(file_path)
+
+        if result is None:
+            raise RuntimeError(f"Failed to parse {file_path.name}: all handlers and fallbacks exhausted")
 
         elapsed = time.perf_counter() - t0
         result["metadata"]["parse_time_s"] = round(elapsed, 3)

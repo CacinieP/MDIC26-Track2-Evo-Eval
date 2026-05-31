@@ -545,8 +545,8 @@ MDIC26-Track2-Evo-Eval/
 │   └── test_llm_client.py           # LLM客户端/提供商检测 (20 tests)
 ├── scripts/
 │   ├── run_demo.py                  # 独立演示脚本
-│   └── test_cloud_api.py            # 云 API (Precise/Free) 集成测试
-├── .env                             # API Token 配置 (python-dotenv 加载)
+│   └── build_ppt.py                 # PPT 生成脚本
+├── .env.example                     # API Token 配置模板 (复制为 .env 使用, 已被 .gitignore 排除)
 ├── data/
 │   ├── samples/                     # 测试样本 (3 PDF + 1 DOCX)
 │   └── output/                      # 解析结果JSON + 提取图片

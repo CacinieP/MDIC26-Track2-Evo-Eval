@@ -1152,7 +1152,7 @@ MDIC26-Track2-Evo-Eval/
 │
 ├── scripts/                         # 辅助脚本
 │   ├── run_demo.py                  # 独立演示脚本: 生成样本PDF并处理
-│   └── test_cloud_api.py            # 云端API测试脚本
+│   └── build_ppt.py                 # PPT 生成脚本
 │
 ├── tests/                           # 测试用例
 │

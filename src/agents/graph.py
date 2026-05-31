@@ -357,7 +357,10 @@ def _heuristic_analyze(
     # --- Adjust difficulty based on file type ---
     if "image" in file_type_hints:
         preprocessing.append("enhance")
-        difficulty = max(difficulty, "medium") if difficulty != "extreme" else "extreme"
+        _DIFF_ORDER = {"easy": 0, "medium": 1, "hard": 2, "extreme": 3}
+        if _DIFF_ORDER.get(difficulty, 0) < _DIFF_ORDER.get("medium", 1):
+            difficulty = "medium"
+        # keep "extreme" as-is
 
     estimated = len(task_types) + len(preprocessing) + 1  # +1 for verification
 
@@ -587,6 +590,7 @@ async def execute_step(state: AgentState) -> dict:
         subtask["status"] = "failed"
         subtask["retry_count"] += 1
         return {
+            "execution_plan": plan,
             "errors": [error_msg],
             "current_step_index": step_idx,  # stays the same; error_handler decides
             "logs": [_log(state, error_msg)],
@@ -644,6 +648,7 @@ async def execute_step(state: AgentState) -> dict:
         advance = step_idx + 1
 
         update: dict = {
+            "execution_plan": plan,
             "current_step_index": advance,
             "step_results": [step_result],
             "logs": new_logs,
@@ -663,6 +668,7 @@ async def execute_step(state: AgentState) -> dict:
         subtask["retry_count"] = subtask.get("retry_count", 0) + 1
 
         return {
+            "execution_plan": plan,
             "current_step_index": step_idx,  # stay on this step for retry
             "errors": [error_msg],
             "logs": [_log(state, error_msg)],
@@ -718,6 +724,7 @@ async def error_handler(state: AgentState) -> dict:
                      f"(attempt {retry_count + 1}/{max_retries})")
             )
             return {
+                "execution_plan": plan,
                 "status": "retrying",
                 "logs": [_log(state, f"Retry scheduled for {subtask['step_id']}")],
             }
@@ -729,6 +736,7 @@ async def error_handler(state: AgentState) -> dict:
             subtask["status"] = "skipped"
             # Advance past the failed step
             return {
+                "execution_plan": plan,
                 "current_step_index": step_idx + 1,
                 "status": "executing",
                 "logs": [_log(state, f"Skipped {subtask['step_id']} after max retries")],
@@ -772,16 +780,16 @@ async def verify_result(state: AgentState) -> dict:
     # --- Build context summary ---
     context_summary = _summarize_results(step_results, raw_content)
 
-    llm_client = _RUNTIME_LLM_CLIENT
+    llm_client = _RuntimeContext.get_llm()
 
     if llm_client is not None:
         try:
             verification = await _llm_verify(llm_client, request, context_summary, plan)
         except Exception as exc:
             logger.warning(_log(state, f"LLM verification failed, using heuristic: {exc}"))
-            verification = _heuristic_verify(request, context_summary, step_results, plan)
+            verification = _heuristic_verify(request, context_summary, step_results, plan, raw_content)
     else:
-        verification = _heuristic_verify(request, context_summary, step_results, plan)
+        verification = _heuristic_verify(request, context_summary, step_results, plan, raw_content)
 
     # Carry forward replan count from previous verification to prevent infinite loops
     prev_verification = state.get("verification_result")
@@ -851,6 +859,7 @@ def _heuristic_verify(
     context_summary: str,
     step_results: list,
     plan: list[dict] | None,
+    raw_content: dict | None = None,
 ) -> dict:
     """
     Heuristic quality verification with dynamic scoring. / 动态评分的启发式质量验证。

@@ -155,7 +155,7 @@ def _parse_chinese_numeral(text: str) -> float | None:
 
     # Check if any Chinese numeral character is present
     all_chars = set(text)
-    if not all_chars.intersection({**_CN_DIGIT, **_CN_UNIT}):
+    if not all_chars.intersection(set(_CN_DIGIT) | set(_CN_UNIT)):
         return None
 
     result = 0

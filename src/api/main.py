@@ -470,9 +470,15 @@ async def submit_task(request: TaskSubmitRequest, background_tasks: BackgroundTa
     )
 
     file_path = request.file_url or ""
-    if file_path and not Path(file_path).exists():
-        task_store.set_failed(task_id, f"File not found: {file_path}")
-        raise HTTPException(status_code=400, detail=f"File not found: {file_path}")
+    if file_path:
+        # Security: reject local filesystem paths — only accept URLs (http/https)
+        if not file_path.lower().startswith(("http://", "https://")):
+            task_store.set_failed(task_id, "file_url must be an HTTP(S) URL, not a local path")
+            raise HTTPException(
+                status_code=400,
+                detail="file_url must be an HTTP(S) URL. For local files, use POST /tasks/upload.",
+            )
+        # TODO: fetch URL content securely (download to temp dir)
 
     background_tasks.add_task(
         _process_task, task_id, file_path, request.task_description, request.options
