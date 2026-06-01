@@ -1072,7 +1072,7 @@ class MinerUParser:
             return n
         except Exception as exc:
             logger.warning(f"Failed to count PDF pages for {file_path}: {exc}")
-            return -1
+            return 0
 
     def _split_pdf(self, file_path: Path, chunk_size: int = 200) -> list[Path]:
         """Split a PDF into chunks of ≤chunk_size pages, return temp file paths."""

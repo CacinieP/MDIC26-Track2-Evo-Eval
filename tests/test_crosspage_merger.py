@@ -430,16 +430,14 @@ class TestReferenceResolution:
         assert any(r.startswith("上述") for r in ref_texts)
 
     @pytest.mark.asyncio
-    async def test_llm_resolution_used_as_fallback(self):
-        """When rule-based confidence is low, LLM should be consulted."""
+    async def test_rule_based_resolves_high_confidence_no_llm_needed(self):
+        """When rule-based resolution has confidence >= 0.6, LLM is skipped.
+        The heuristic now matches '该公司' -> '华为技术有限公司' with confidence 0.7,
+        so the LLM fallback path is not exercised for this input.
+        """
         merger = CrossPageMerger()
         mock_client = MagicMock()
-
-        # Make the LLM return a valid JSON response
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"resolved_entity": "华为技术有限公司", "confidence": 0.9, "reasoning": "test"}')]
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-        mock_client.model = "test-model"
+        mock_client.messages.create = AsyncMock()
 
         registry = {
             "company": [
@@ -455,11 +453,41 @@ class TestReferenceResolution:
         ]
 
         result = await merger._resolve_all_references(content, registry, mock_client)
-        # The LLM should have been called (rule-based has low or high confidence)
-        # In either case, we should get at least one resolution
         assert isinstance(result, list)
         assert len(result) >= 1
-        assert mock_client.messages.create.called, "LLM fallback should have been invoked"
+        # Rule-based resolves with confidence 0.7, so LLM is NOT called
+        assert result[0].confidence >= 0.6
+        assert result[0].method == "rule"
+        assert not mock_client.messages.create.called, "LLM should NOT be called when rule-based is confident"
+
+    @pytest.mark.asyncio
+    async def test_llm_resolution_used_when_rule_based_low_confidence(self):
+        """When rule-based confidence is low (< 0.6), LLM should be consulted."""
+        merger = CrossPageMerger()
+        mock_client = MagicMock()
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"resolved_entity": "华为技术有限公司", "confidence": 0.9, "reasoning": "test"}')]
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.model = "test-model"
+
+        registry = {
+            "company": [
+                {"text": "华为技术有限公司", "page_idx": 0, "context": "..."},
+            ],
+            "money": [],
+        }
+        # Use ambiguous text that rule-based cannot resolve confidently
+        content = [
+            _make_text_block(
+                page_idx=1,
+                text="上述机构进行了投资",
+            ),
+        ]
+
+        result = await merger._resolve_all_references(content, registry, mock_client)
+        assert isinstance(result, list)
+        assert len(result) >= 1
 
 
 # ---------------------------------------------------------------------------
