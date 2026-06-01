@@ -23,7 +23,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt 2>&1 | tee install-log.txt
+        continue-on-error: false
+
+      - name: Install summary
+        if: always()
+        run: |
+          echo "=== pip install result ==="
+          tail -20 install-log.txt || echo "no install log"
 
       - name: Run tests
         run: |
