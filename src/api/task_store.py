@@ -198,7 +198,7 @@ class TaskStore:
 
     def add_log(self, task_id: str, message: str) -> None:
         """Append a log entry to a task."""
-        ts = time.strftime("%H:%M:%S")
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
         entry = f"[{ts}] {message}"
         with self._lock:
             task = self._tasks.get(task_id)

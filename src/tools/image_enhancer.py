@@ -425,27 +425,6 @@ class ImageEnhancer:
     # 3. ENHANCEMENT OPERATIONS
     # =======================================================================
 
-    def _apply_enhancement(self, image: np.ndarray, assessment: QualityReport) -> np.ndarray:
-        """Apply the full enhancement pipeline based on the quality report."""
-        result = image.copy()
-
-        if assessment.needs_upscale:
-            result = self._upscale(result, 300, assessment.estimated_dpi)
-
-        if assessment.has_stamps:
-            result = self._remove_stamps(result)
-
-        if assessment.needs_deskew:
-            result = self._deskew(result, assessment.skew_angle)
-
-        if assessment.is_low_contrast:
-            result = self._apply_clahe(result)
-
-        if assessment.is_noisy:
-            result = self._denoise(result, assessment.noise_level)
-
-        return result
-
     # -- upscale -------------------------------------------------------------
 
     @staticmethod

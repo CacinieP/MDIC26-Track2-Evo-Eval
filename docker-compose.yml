@@ -51,6 +51,9 @@ services:
     # GPU support (requires NVIDIA Container Toolkit)
     deploy:
       resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
         reservations:
           devices:
             - driver: nvidia

@@ -526,7 +526,11 @@ class MinerUParser:
         all_images: list[dict] = []
 
         for ds_entry in datasets:
-            pdf_bytes = ds_entry  # bytes
+            # read_local_office returns a list of (pdf_bytes, lang) tuples
+            if isinstance(ds_entry, tuple):
+                pdf_bytes, lang = ds_entry
+            else:
+                pdf_bytes = ds_entry
             ds = PymuDocDataset(bits=pdf_bytes, lang=self.ocr_lang)
             total_pages += len(ds)
 
@@ -998,6 +1002,7 @@ class MinerUParser:
         Returns structured dict on success, None on failure.
         """
         import requests as sync_requests
+        from urllib.parse import urlparse
 
         file_size = file_path.stat().st_size
         file_name = file_path.name
@@ -1025,7 +1030,12 @@ class MinerUParser:
                 # Check page count for PDFs — split if > 200 pages
                 if suffix == ".pdf":
                     page_count = self._count_pdf_pages(file_path)
-                    if page_count > 200:
+                    if page_count == -1:
+                        logger.warning(
+                            "Could not determine PDF page count; proceeding "
+                            "without splitting — large files may fail"
+                        )
+                    elif page_count > 200:
                         return await self._cloud_precise_split(file_path, file_name, page_count)
 
                 return await self._cloud_precise_api(file_path, file_name, suffix)
@@ -1038,40 +1048,63 @@ class MinerUParser:
             return None
 
     @staticmethod
+    def _validate_url(url: str) -> bool:
+        """Validate that a URL returned by the cloud API points to an allowed domain."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.hostname and not parsed.hostname.endswith("mineru.net"):
+            logger.warning(f"Skipping suspicious URL: {parsed.hostname}")
+            return False
+        return True
+
+    @staticmethod
     def _count_pdf_pages(file_path: Path) -> int:
-        """Count PDF pages using PyMuPDF (fitz)."""
+        """Count PDF pages using PyMuPDF (fitz).
+
+        Returns the page count on success, or -1 on failure (as a sentinel
+        indicating the count is unknown).
+        """
         try:
             import fitz
             doc = fitz.open(str(file_path))
             n = len(doc)
             doc.close()
             return n
-        except Exception:
-            return 0
+        except Exception as exc:
+            logger.warning(f"Failed to count PDF pages for {file_path}: {exc}")
+            return -1
 
     def _split_pdf(self, file_path: Path, chunk_size: int = 200) -> list[Path]:
         """Split a PDF into chunks of ≤chunk_size pages, return temp file paths."""
         import fitz
         import tempfile
 
-        doc = fitz.open(str(file_path))
-        total = len(doc)
-        chunks: list[Path] = []
-        tmp_dir = Path(tempfile.mkdtemp(prefix="mineru_split_"))
+        doc = None
+        try:
+            doc = fitz.open(str(file_path))
+            total = len(doc)
+            chunks: list[Path] = []
+            tmp_dir = Path(tempfile.mkdtemp(prefix="mineru_split_"))
 
-        for start in range(0, total, chunk_size):
-            end = min(start + chunk_size, total)
-            chunk_doc = fitz.open()
-            chunk_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
-            chunk_path = tmp_dir / f"{file_path.stem}_part{len(chunks)+1}_{start+1}-{end}.pdf"
-            chunk_doc.save(str(chunk_path))
-            chunk_doc.close()
-            chunks.append(chunk_path)
-            logger.info(f"Split chunk {len(chunks)}: pages {start+1}-{end} ({chunk_path.name})")
+            for start in range(0, total, chunk_size):
+                end = min(start + chunk_size, total)
+                chunk_doc = None
+                try:
+                    chunk_doc = fitz.open()
+                    chunk_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
+                    chunk_path = tmp_dir / f"{file_path.stem}_part{len(chunks)+1}_{start+1}-{end}.pdf"
+                    chunk_doc.save(str(chunk_path))
+                    chunks.append(chunk_path)
+                    logger.info(f"Split chunk {len(chunks)}: pages {start+1}-{end} ({chunk_path.name})")
+                finally:
+                    if chunk_doc is not None:
+                        chunk_doc.close()
 
-        doc.close()
-        logger.info(f"Split {file_path.name} into {len(chunks)} chunks")
-        return chunks
+            logger.info(f"Split {file_path.name} into {len(chunks)} chunks")
+            return chunks
+        finally:
+            if doc is not None:
+                doc.close()
 
     async def _cloud_precise_split(self, file_path: Path, file_name: str, total_pages: int) -> dict | None:
         """Split a large PDF, process each chunk via Precise API, merge results."""
@@ -1219,6 +1252,10 @@ class MinerUParser:
         if markdown_content is None:
             return None
 
+        # Validate the URL before fetching
+        if not self._validate_url(markdown_content):
+            return None
+
         # Download the Markdown
         md_resp = await loop.run_in_executor(
             None,
@@ -1301,6 +1338,10 @@ class MinerUParser:
         )
 
         if zip_url is None:
+            return None
+
+        # Validate the URL before fetching
+        if not self._validate_url(zip_url):
             return None
 
         # Step 4: Download and parse the Zip
@@ -1470,7 +1511,13 @@ class MinerUParser:
                 pix = page.get_pixmap(matrix=mat)
                 img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
 
-                enhanced = ImagePreprocessor.enhance(img)
+                # Handle RGBA images by converting to BGR before enhancement
+                if len(img.shape) == 3:
+                    if img.shape[2] == 4:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    enhanced = ImagePreprocessor.enhance(img)
+                else:
+                    enhanced = ImagePreprocessor.enhance(img)
 
                 # Encode back to PNG
                 pil_img = Image.fromarray(enhanced)

@@ -14,6 +14,7 @@ The API wires the LangGraph agent to HTTP endpoints with async background proces
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import shutil
@@ -117,9 +118,13 @@ app = FastAPI(
 
 # --- CORS middleware ---
 # Restrict origins via env var API_CORS_ORIGINS (comma-separated).
-# Defaults to ["*"] for development but should be tightened for production.
-_cors_origins_str = os.environ.get("API_CORS_ORIGINS", "*")
-_cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+# Defaults to localhost-only when env var is not set.
+_cors_origins_str = os.environ.get("API_CORS_ORIGINS", "")
+if _cors_origins_str:
+    _cors_origins = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+else:
+    _cors_origins = ["http://localhost:3000", "http://localhost:8000"]
+    logger.warning("CORS: API_CORS_ORIGINS not set — using default restricted origins (localhost only)")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -139,7 +144,7 @@ async def api_key_middleware(request: Request, call_next):
     """Optional API key check.  Skipped when API_KEY env var is empty."""
     if _API_KEY and request.url.path not in _PUBLIC_PATHS:
         key = request.headers.get("X-API-Key", "")
-        if key != _API_KEY:
+        if not hmac.compare_digest(key, _API_KEY):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key. Set X-API-Key header."},
@@ -381,6 +386,15 @@ async def _process_task(task_id: str, file_path: str, request: str, options: dic
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
         task_store.set_failed(task_id, str(e))
+    finally:
+        # Clean up temp file after processing (success or failure)
+        try:
+            temp_file = Path(file_path)
+            if temp_file.exists() and _temp_dir in temp_file.parents:
+                temp_file.unlink()
+                logger.info(f"Cleaned up temp file: {temp_file}")
+        except Exception as cleanup_err:
+            logger.warning(f"Failed to clean up temp file {file_path}: {cleanup_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -408,19 +422,38 @@ async def _save_upload_file(file: UploadFile, task_id: str, suffix: str) -> Path
     """
     save_path = _temp_dir / f"{task_id}{suffix}"
     try:
+        # Check file size before reading into memory
+        file_size = getattr(file, "size", None)
+        if file_size is None:
+            # Fallback: use Content-Length header
+            content_length = file.headers.get("content-length")
+            if content_length:
+                try:
+                    file_size = int(content_length)
+                except (ValueError, TypeError):
+                    file_size = None
+        if file_size is not None and file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: {file_size} bytes (max {MAX_FILE_SIZE})",
+            )
+
         content = await file.read()
+
+        # Double-check actual size after read
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
-                status_code=400,
-                detail=f"File too large ({len(content)} bytes). Max: {MAX_FILE_SIZE // (1024 * 1024)}MB",
+                status_code=413,
+                detail=f"File too large: {len(content)} bytes (max {MAX_FILE_SIZE})",
             )
         with open(save_path, "wb") as f:
             f.write(content)
     except HTTPException:
         raise
     except Exception as e:
-        task_store.set_failed(task_id, f"File save error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+        logger.error(f"Failed to save uploaded file for task {task_id}: {e}")
+        task_store.set_failed(task_id, "File save error")
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
     task_store.add_log(task_id, f"File uploaded: {file.filename} ({len(content)} bytes)")
     return save_path

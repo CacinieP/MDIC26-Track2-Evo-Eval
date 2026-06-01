@@ -627,19 +627,21 @@ class CrossPageMerger:
         """
         Detect and merge text blocks broken across page boundaries.
 
+        Supports merging chains of 3+ consecutive pages by first identifying
+        all continuation relationships, grouping them into chains, and then
+        merging each chain in a single pass.
+
         Returns (merged_content, merge_operations).
         """
         if not content_list:
             return content_list, []
 
         operations: list[MergeOperation] = []
-        merged_indices: set[int] = set()
-        replacements: dict[int, dict] = {}
 
-        # Group consecutive text blocks across page boundaries
+        # Phase 1: Identify all continuation relationships between consecutive blocks
+        # continuation_links[i] = i+1 means block i continues into block i+1
+        continuation_links: dict[int, int] = {}
         for i in range(len(content_list) - 1):
-            if i in merged_indices:
-                continue
             block_a = content_list[i]
             block_b = content_list[i + 1]
 
@@ -653,51 +655,72 @@ class CrossPageMerger:
                 continue
 
             if self._detect_text_continuation(text_a, text_b):
-                page_a = block_a.get("page_idx", -1)
-                page_b = block_b.get("page_idx", -1)
+                continuation_links[i] = i + 1
 
-                # Determine join character
-                join_char = self._determine_join_char(text_a, text_b)
-                merged_text = text_a + join_char + text_b
+        if not continuation_links:
+            return content_list, []
 
-                merged_block = dict(block_a)
-                merged_block["text"] = merged_text
-                merged_block["_merged_from_pages"] = [page_a, page_b]
-                merged_block["_merge_confidence"] = 0.9
+        # Phase 2: Group consecutive links into chains
+        # A chain is a list of indices [start, start+1, ..., end] where
+        # each consecutive pair is linked.
+        visited: set[int] = set()
+        chains: list[list[int]] = []
 
-                # Check if block_a was already a merge target
-                if i in replacements:
-                    # Extend the existing merge
-                    prev = replacements[i]
-                    prev_text = prev.get("text", "")
-                    join_char2 = self._determine_join_char(prev_text, text_b)
-                    prev["text"] = prev_text + join_char2 + text_b
-                    prev_pages = prev.get("_merged_from_pages", [])
-                    prev_pages.append(page_b)
-                    prev["_merged_from_pages"] = prev_pages
-                    merged_indices.add(i + 1)
-                else:
-                    replacements[i] = merged_block
-                    merged_indices.add(i + 1)
+        for start_idx in sorted(continuation_links.keys()):
+            if start_idx in visited:
+                continue
+            chain = [start_idx]
+            visited.add(start_idx)
+            current = start_idx
+            while current in continuation_links:
+                nxt = continuation_links[current]
+                chain.append(nxt)
+                visited.add(nxt)
+                current = nxt
+            if len(chain) >= 2:
+                chains.append(chain)
 
-                op = MergeOperation(
-                    operation_type="text_merge",
-                    source_indices=[i, i + 1],
-                    source_page_indices=[page_a, page_b],
-                    reason=f"Text broken across pages {page_a} -> {page_b}",
-                    confidence=0.9,
-                    details={
-                        "text_a_tail": text_a[-50:] if text_a else "",
-                        "text_b_head": text_b[:50:] if text_b else "",
-                        "join_char": repr(join_char),
-                    },
-                )
-                operations.append(op)
+        # Phase 3: Merge each chain into a single block
+        merged_indices: set[int] = set()
+        replacements: dict[int, dict] = {}
 
-                logger.debug(
-                    f"Text merge: page {page_a} -> {page_b} "
-                    f"(tail='{text_a[-20:]}' + head='{text_b[:20]}')"
-                )
+        for chain in chains:
+            # chain = [i0, i1, i2, ...]  where i0 is the anchor
+            anchor = chain[0]
+            anchor_block = content_list[anchor]
+            merged_text = anchor_block.get("text", "")
+            page_indices = [anchor_block.get("page_idx", -1)]
+
+            for idx in chain[1:]:
+                block = content_list[idx]
+                text_b = block.get("text", "")
+                join_char = self._determine_join_char(merged_text, text_b)
+                merged_text = merged_text + join_char + text_b
+                page_indices.append(block.get("page_idx", -1))
+                merged_indices.add(idx)
+
+            merged_block = dict(anchor_block)
+            merged_block["text"] = merged_text
+            merged_block["_merged_from_pages"] = page_indices
+            merged_block["_merge_confidence"] = 0.9
+            replacements[anchor] = merged_block
+
+            op = MergeOperation(
+                operation_type="text_merge",
+                source_indices=chain,
+                source_page_indices=page_indices,
+                reason=f"Text broken across pages {page_indices}",
+                confidence=0.9,
+                details={
+                    "chain_length": len(chain),
+                    "merged_length": len(merged_text),
+                },
+            )
+            operations.append(op)
+
+            logger.debug(
+                f"Text merge: chain of {len(chain)} blocks across pages {page_indices}"
+            )
 
         # Rebuild content list
         result: list[dict] = []
@@ -727,7 +750,7 @@ class CrossPageMerger:
         # Chinese sentence-final punctuation
         sentence_enders = set("。！？；：…\n.!?;:")
         # Characters that suggest text_a ends properly (not mid-sentence)
-        proper_endings = sentence_enders | set("）)】】》」』\"'")
+        proper_endings = sentence_enders | set("）)】》」』\"'")
 
         a_last = text_a.rstrip()[-1] if text_a.rstrip() else ""
         b_first = text_b.lstrip()[0] if text_b.lstrip() else ""
@@ -757,7 +780,7 @@ class CrossPageMerger:
             if not b_is_heading:
                 # Additional check: text_b should not start with a capital
                 # letter after a period (English) or a paragraph indent
-                if b_starts_continuation or not a_ends_properly:
+                if b_starts_continuation:
                     return True
 
         # Weak signal: the concatenation makes grammatical sense (very

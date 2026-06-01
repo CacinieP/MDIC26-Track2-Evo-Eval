@@ -66,7 +66,8 @@ COPY requirements.txt .
 COPY configs/ ./configs/
 COPY data/ ./data/
 COPY docs/ ./docs/
-COPY logs/ ./logs/
+# NOTE: logs/ should NOT be baked into the image; mount as a volume at runtime
+# COPY logs/ ./logs/
 COPY scripts/ ./scripts/
 COPY pytest.ini .
 
@@ -77,5 +78,8 @@ EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+RUN useradd -r -s /bin/false appuser
+USER appuser
 
 CMD ["python", "main.py", "serve", "--host", "0.0.0.0", "--port", "8000"]

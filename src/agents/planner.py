@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -112,7 +113,11 @@ Return JSON with:
 """
         if self.llm:
             response = await self.llm.generate(prompt)
-            return json.loads(response)
+            try:
+                return json.loads(response)
+            except json.JSONDecodeError:
+                logger.warning(f"LLM returned invalid JSON, falling back to heuristic analysis")
+                return self._heuristic_analysis(request, file_info)
         else:
             # Fallback: basic heuristic analysis
             return self._heuristic_analysis(request, file_info)
@@ -131,7 +136,7 @@ Return JSON with:
         assessment = await self.analyze_task(request, file_info)
 
         subtasks = []
-        task_id = f"task_{int(time.time())}"
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
 
         # Step 1: Preprocessing
         if assessment.get("preprocessing_needed"):
@@ -211,14 +216,23 @@ Return JSON with:
         request_lower = request.lower()
         if any(kw in request_lower for kw in ("表格", "报表", "财务", "table", "financial")):
             task_types.append("table_extract")
-        if any(kw in request_lower for kw in ("图表", "chart", "图", "graph")):
+        if any(kw in request_lower for kw in ("图表", "图表分析", "解析图表", "chart", "graph")):
             task_types.append("chart_analysis")
         if any(kw in request_lower for kw in ("模糊", "拍照", "手写", "blurry", "handwritten")):
             preprocessing.extend(["denoise", "enhance", "deskew"])
 
+        # Basic difficulty assessment based on request characteristics
+        if (any(kw in request_lower for kw in ("详细", "全面", "所有", "complete", "comprehensive", "all"))
+                or len(task_types) >= 3 or len(preprocessing) >= 2):
+            difficulty = "hard"
+        elif len(request) < 20 and len(task_types) <= 1 and not preprocessing:
+            difficulty = "easy"
+        else:
+            difficulty = "medium"
+
         return {
             "task_types": task_types,
-            "difficulty": "medium",
+            "difficulty": difficulty,
             "key_challenges": [],
             "recommended_tools": ["mineru_parser"],
             "estimated_subtasks": len(task_types) + 2,

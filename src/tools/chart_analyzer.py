@@ -12,6 +12,7 @@ Handles:
 from __future__ import annotations
 
 import base64
+import mimetypes
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -288,10 +289,18 @@ class ChartAnalyzer:
 
             logger.info(f"Analyzing image: {image_path} (page {page_idx})")
 
-            # Step 1: Classify chart type
-            chart_type, confidence = await self._classify_chart_type(
+            # Step 1: Classify chart type (also obtains chart_count from the
+            # same LLM call, avoiding a duplicate request)
+            classification_result = await self._classify_chart_type_full(
                 image_path, client=client,
             )
+            chart_type = classification_result.get("chart_type", ChartType.UNKNOWN)
+            confidence = float(classification_result.get("confidence", 0.5))
+            is_chart = classification_result.get("is_chart", True)
+            if not is_chart:
+                chart_type = ChartType.UNKNOWN
+                confidence = 0.0
+
             logger.info(
                 f"Classification: {chart_type} (confidence={confidence:.2f})"
             )
@@ -300,10 +309,9 @@ class ChartAnalyzer:
                 logger.info("Image does not appear to contain a chart; skipping")
                 continue
 
-            # Step 2: Detect how many charts are in the image
-            chart_count = await self._detect_chart_count(
-                image_path, client=client,
-            )
+            # Step 2: Detect how many charts are in the image (reuse
+            # classification result instead of making a second LLM call)
+            chart_count = self._detect_chart_count(classification_result, image_path)
             logger.info(f"Detected {chart_count} chart(s) in image")
 
             # Step 3: Extract data
@@ -365,6 +373,34 @@ class ChartAnalyzer:
     # Classification
     # -----------------------------------------------------------------------
 
+    async def _classify_chart_type_full(
+        self,
+        image_path: str,
+        client: Any = None,
+    ) -> dict:
+        """
+        Classify the chart type and return the full classification dict.
+
+        Tries LLM vision first; falls back to OpenCV heuristics.
+        Returns a dict with keys: chart_type, confidence, is_chart, chart_count.
+        """
+        if client is not None:
+            try:
+                result = await self._llm_classify(image_path, client)
+                if result:
+                    return result
+            except Exception as exc:
+                logger.warning(f"LLM classification failed, falling back: {exc}")
+
+        # Fallback: OpenCV heuristic
+        chart_type, confidence = _basic_chart_type_detection(image_path)
+        return {
+            "chart_type": chart_type,
+            "confidence": confidence,
+            "is_chart": confidence > 0.1,
+            "chart_count": 1,
+        }
+
     async def _classify_chart_type(
         self,
         image_path: str,
@@ -376,34 +412,26 @@ class ChartAnalyzer:
         Tries LLM vision first; falls back to OpenCV heuristics.
         Returns (chart_type: str, confidence: float).
         """
-        if client is not None:
-            try:
-                result = await self._llm_classify(image_path, client)
-                if result:
-                    chart_type = result.get("chart_type", ChartType.UNKNOWN)
-                    confidence = float(result.get("confidence", 0.5))
-                    is_chart = result.get("is_chart", True)
-                    if not is_chart:
-                        return ChartType.UNKNOWN, 0.0
-                    return chart_type, confidence
-            except Exception as exc:
-                logger.warning(f"LLM classification failed, falling back: {exc}")
+        result = await self._classify_chart_type_full(image_path, client)
+        chart_type = result.get("chart_type", ChartType.UNKNOWN)
+        confidence = float(result.get("confidence", 0.5))
+        is_chart = result.get("is_chart", True)
+        if not is_chart:
+            return ChartType.UNKNOWN, 0.0
+        return chart_type, confidence
 
-        # Fallback: OpenCV heuristic
-        return _basic_chart_type_detection(image_path)
-
-    async def _detect_chart_count(
+    def _detect_chart_count(
         self,
+        classification_result: dict,
         image_path: str,
-        client: Any = None,
     ) -> int:
-        """Detect how many distinct charts exist in the image."""
-        if client is not None:
-            try:
-                result = await self._llm_classify(image_path, client)
-                return int(result.get("chart_count", 1))
-            except Exception:
-                pass
+        """Detect how many distinct charts exist in the image.
+
+        Uses the cached classification result when available to avoid
+        a redundant LLM call.
+        """
+        if classification_result and "chart_count" in classification_result:
+            return int(classification_result["chart_count"])
         return 1
 
     # -----------------------------------------------------------------------
@@ -515,6 +543,7 @@ class ChartAnalyzer:
         messages = self._build_vision_messages(
             _CLASSIFICATION_PROMPT,
             image_b64,
+            image_path,
         )
 
         response = await self._call_llm(client, messages)
@@ -543,7 +572,7 @@ class ChartAnalyzer:
 
         prompt = _DATA_EXTRACTION_PROMPT.format(chart_type=chart_type)
         image_b64 = self._encode_image(image_path)
-        messages = self._build_vision_messages(prompt, image_b64)
+        messages = self._build_vision_messages(prompt, image_b64, image_path)
 
         response = await self._call_llm(client, messages)
         if not response:
@@ -568,7 +597,7 @@ class ChartAnalyzer:
         """Use LLM vision to generate a description."""
         prompt = _DESCRIPTION_PROMPT.format(chart_type=chart_type)
         image_b64 = self._encode_image(image_path)
-        messages = self._build_vision_messages(prompt, image_b64)
+        messages = self._build_vision_messages(prompt, image_b64, image_path)
 
         return await self._call_llm(client, messages)
 
@@ -579,7 +608,7 @@ class ChartAnalyzer:
             return base64.b64encode(f.read()).decode("utf-8")
 
     @staticmethod
-    def _build_vision_messages(prompt: str, image_b64: str) -> list[dict]:
+    def _build_vision_messages(prompt: str, image_b64: str, image_path: str | None = None) -> list[dict]:
         """
         Build a message payload compatible with common LLM vision APIs.
 
@@ -587,7 +616,12 @@ class ChartAnalyzer:
         - Anthropic Claude (content blocks)
         - OpenAI-compatible / Qwen-VL (image_url)
         """
-        # Detect format via media type hint — default to PNG
+        # Detect actual image format from the file extension; fall back to PNG
+        media_type = None
+        if image_path:
+            media_type, _ = mimetypes.guess_type(str(image_path))
+        if not media_type:
+            media_type = "image/png"
         return [
             {
                 "role": "user",
@@ -597,7 +631,7 @@ class ChartAnalyzer:
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": media_type,
                             "data": image_b64,
                         },
                     },

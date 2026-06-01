@@ -196,7 +196,7 @@ def _parse_chinese_numeral(text: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 _UNIT_PATTERN = re.compile(
-    r"(万亿元|万亿元|万元|亿元|万|亿|元|％|%)",
+    r"(万亿元|万元|亿元|万|亿|元|％|%)",
 )
 
 _ARABIC_NUMBER = re.compile(
@@ -664,42 +664,51 @@ def _validate_numeric_consistency(
         numeric_grid.append(numeric_row)
 
     # --- Row sum checks ---
-    # Look for rows where some cells are sub-items and one is a total.
-    # Heuristic: the last numeric column often contains totals.
+    # NOTE: This validation only applies to tables where columns represent
+    # sub-categories that sum to a total (e.g. a balance sheet where
+    # "流动资产 + 非流动资产 = 资产总计").  For tables where columns are
+    # independent (e.g. year-over-year comparison), the sum check may produce
+    # false positives.  We gate this on the table having a recognised financial
+    # type so that generic tables are not penalised.
     if len(rows) > 2 and numeric_grid:
         num_cols = max(len(r) for r in numeric_grid) if numeric_grid else 0
         if num_cols >= 2:
-            # Try the last numeric column as the "total" column
-            total_col = _find_last_numeric_col(numeric_grid)
-            if total_col is not None and total_col > 0:
-                for ri, nrow in enumerate(numeric_grid):
-                    # Check if this row looks like a subtotal row
-                    # (has values in multiple columns including the total)
-                    values: list[tuple[int, float]] = []
-                    for ci, cell in enumerate(nrow):
-                        if ci == total_col:
-                            continue
-                        if cell.value is not None:
-                            values.append((ci, cell.value))
+            # Determine if this table has a summable structure by checking
+            # whether the first column contains sub-category labels and a
+            # later column holds totals (common in financial statements).
+            is_summable = _is_summable_table_structure(headers, rows)
+            if is_summable:
+                # Try the last numeric column as the "total" column
+                total_col = _find_last_numeric_col(numeric_grid)
+                if total_col is not None and total_col > 0:
+                    for ri, nrow in enumerate(numeric_grid):
+                        # Check if this row looks like a subtotal row
+                        # (has values in multiple columns including the total)
+                        values: list[tuple[int, float]] = []
+                        for ci, cell in enumerate(nrow):
+                            if ci == total_col:
+                                continue
+                            if cell.value is not None:
+                                values.append((ci, cell.value))
 
-                    if len(values) >= 2:
-                        total_cell = nrow[total_col] if total_col < len(nrow) else None
-                        if total_cell and total_cell.value is not None:
-                            expected = sum(v for _, v in values)
-                            actual = total_cell.value
-                            # Allow tolerance for rounding
-                            tolerance = max(abs(expected) * 0.02, 1.0)
-                            diff = abs(expected - actual)
-                            passed = diff <= tolerance
-                            report.row_sum_checks.append({
-                                "row": ri,
-                                "expected": round(expected, 4),
-                                "actual": round(actual, 4),
-                                "diff": round(diff, 4),
-                                "passed": passed,
-                            })
-                            if not passed:
-                                report.overall_pass = False
+                        if len(values) >= 2:
+                            total_cell = nrow[total_col] if total_col < len(nrow) else None
+                            if total_cell and total_cell.value is not None:
+                                expected = sum(v for _, v in values)
+                                actual = total_cell.value
+                                # Allow tolerance for rounding
+                                tolerance = max(abs(expected) * 0.02, 1.0)
+                                diff = abs(expected - actual)
+                                passed = diff <= tolerance
+                                report.row_sum_checks.append({
+                                    "row": ri,
+                                    "expected": round(expected, 4),
+                                    "actual": round(actual, 4),
+                                    "diff": round(diff, 4),
+                                    "passed": passed,
+                                })
+                                if not passed:
+                                    report.overall_pass = False
 
     # --- Percentage cross-reference checks ---
     # Look for rows with 同比增长/环比增长 patterns
@@ -799,6 +808,43 @@ def _find_last_numeric_col(
         if count >= len(numeric_grid) * 0.3:
             return ci
     return None
+
+
+def _is_summable_table_structure(
+    headers: list[list[str]],
+    rows: list[list[str]],
+) -> bool:
+    """Heuristic: does this table have a structure where columns sum to a total?
+
+    Returns True when the first column contains sub-category labels (mostly
+    non-numeric) and subsequent columns hold numeric values -- the pattern
+    found in balance sheets, income statements, etc.  Returns False for
+    generic tables or year-over-year comparison tables where summation is
+    not meaningful.
+    """
+    if not rows:
+        return False
+
+    # Check that the first column is predominantly text (labels)
+    text_count = 0
+    total_first_col = 0
+    for row in rows:
+        if row:
+            cell = row[0].strip()
+            if cell:
+                total_first_col += 1
+                nc = _extract_numeric(cell)
+                if nc.value is None:
+                    text_count += 1
+
+    if total_first_col == 0:
+        return False
+
+    label_ratio = text_count / total_first_col
+
+    # If more than half the first column cells are text labels, this looks
+    # like a summable structure.
+    return label_ratio > 0.5
 
 
 # ---------------------------------------------------------------------------

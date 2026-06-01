@@ -34,7 +34,7 @@ except ImportError:
 def cmd_serve(args):
     """Start the FastAPI API server."""
     import uvicorn
-    host = args.host or "0.0.0.0"
+    host = args.host or "127.0.0.1"
     port = args.port or 8000
     print(f"[START] Starting MinerU DataAgent API server at http://{host}:{port}")
     print(f"   API docs: http://{host}:{port}/docs")
@@ -64,6 +64,19 @@ def cmd_parse(args):
         print(f"[X] File not found: {file_path}")
         sys.exit(1)
 
+    # Validate path is within expected directories
+    resolved = file_path.resolve()
+    if not str(resolved).startswith(str(Path.cwd().resolve())):
+        # Allow if file is explicitly passed (CLI tool), but log a warning
+        import logging
+        logging.getLogger(__name__).warning(f"File path outside CWD: {resolved}")
+
+    # Validate file extension
+    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.docx', '.pptx', '.html', '.htm', '.tiff', '.bmp'}
+    if file_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+        print(f"Error: Unsupported file type '{file_path.suffix}'. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+        sys.exit(1)
+
     print(f"[FILE] Parsing: {file_path.name}")
     t0 = time.time()
 
@@ -83,12 +96,17 @@ def cmd_parse(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = output_dir / f"{file_path.stem}_result.json"
+    output = result.get("final_output")
+    if output is None:
+        output = {"status": result.get("status", "unknown"), "error": "No final output produced"}
     with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(result.get("final_output", result), f, ensure_ascii=False, indent=2)
+        json.dump(output, f, ensure_ascii=False, indent=2)
     print(f"[SAVE] Results saved to: {output_file}")
 
     # Print summary
-    final = result.get("final_output", {})
+    final = result.get("final_output")
+    if final is None:
+        final = {}
     if final:
         exec_summary = final.get("execution_summary", [])
         print(f"\n[STATS] Execution Summary ({len(exec_summary)} steps):")
@@ -124,7 +142,13 @@ def cmd_batch(args):
         print(f"[X] Directory not found: {input_dir}")
         sys.exit(1)
 
-    supported_exts = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".pptx", ".html", ".htm"}
+    # Validate path is within expected directories
+    resolved_dir = input_dir.resolve()
+    if not str(resolved_dir).startswith(str(Path.cwd().resolve())):
+        import logging
+        logging.getLogger(__name__).warning(f"Directory path outside CWD: {resolved_dir}")
+
+    supported_exts = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".pptx", ".html", ".htm", ".tiff", ".bmp"}
     files = [f for f in input_dir.iterdir() if f.suffix.lower() in supported_exts]
 
     if not files:
@@ -192,6 +216,12 @@ def cmd_batch(args):
         json.dump(results_summary, f, ensure_ascii=False, indent=2)
     print(f"\n[SAVE] Summary saved to: {summary_file}")
 
+    # Exit with non-zero code if there were errors
+    errors = [r for r in results_summary if r.get("status") == "error"]
+    if errors:
+        print(f"\nCompleted with {len(errors)} error(s) out of {len(results_summary)} files")
+        sys.exit(1)
+
 
 def cmd_demo(args):
     """Run demo examples with synthetic test data."""
@@ -238,6 +268,8 @@ def cmd_demo(args):
         print(f"   Request: {demo['request']}")
 
         t0 = time.time()
+        # Note: demo mode uses dry-run — file_path is intentionally None;
+        # downstream tools should handle a missing file_path gracefully.
         result = asyncio.run(graph.ainvoke({
             "task_id": demo["task_id"],
             "request": demo["request"],
@@ -247,7 +279,9 @@ def cmd_demo(args):
         }))
         elapsed = time.time() - t0
 
-        final = result.get("final_output", {})
+        final = result.get("final_output")
+        if final is None:
+            final = {"status": result.get("status", "unknown"), "error": "No final output produced"}
         status = final.get("status", "unknown")
         exec_steps = final.get("execution_summary", [])
         verification = final.get("verification", {})
@@ -286,7 +320,7 @@ Examples:
 
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start API server")
-    serve_parser.add_argument("--host", default="0.0.0.0", help="Bind host")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     serve_parser.add_argument("--port", type=int, default=8000, help="Bind port")
     serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
 
@@ -316,6 +350,7 @@ Examples:
         cmd_demo(args)
     else:
         parser.print_help()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

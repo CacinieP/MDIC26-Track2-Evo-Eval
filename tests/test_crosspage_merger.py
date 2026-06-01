@@ -459,6 +459,7 @@ class TestReferenceResolution:
         # In either case, we should get at least one resolution
         assert isinstance(result, list)
         assert len(result) >= 1
+        assert mock_client.messages.create.called, "LLM fallback should have been invoked"
 
 
 # ---------------------------------------------------------------------------

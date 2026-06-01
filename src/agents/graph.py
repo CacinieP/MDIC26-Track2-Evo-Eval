@@ -43,9 +43,10 @@ Dependencies / 依赖:
 
 import asyncio
 import contextvars
-import copy
 import json
 import operator
+import re
+import threading
 import time
 from typing import Annotated, Any, TypedDict
 
@@ -70,6 +71,65 @@ QUALITY_THRESHOLD: float = 0.7
 
 MAX_REPLAN_CYCLES: int = 2
 """Maximum re-plan iterations after failed verification. / 验证失败后最大重规划次数。"""
+
+
+# ---------------------------------------------------------------------------
+# Helper: sanitize user input before interpolating into LLM prompts
+# ---------------------------------------------------------------------------
+
+_INJECTION_PATTERNS = re.compile(
+    r"^(ignore|disregard|forget|system:|new instruction:|you are now|"
+    r"override|previous instructions were|act as)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_prompt_input(text: str, max_len: int = 2000) -> str:
+    """Truncate and strip obvious instruction-injection lines from user input."""
+    if not isinstance(text, str):
+        text = str(text)
+    text = text[:max_len]
+    cleaned_lines = [
+        line for line in text.split("\n")
+        if not _INJECTION_PATTERNS.match(line.strip())
+    ]
+    return "\n".join(cleaned_lines)
+
+
+def _extract_json_from_response(text: str) -> str:
+    """Extract JSON from an LLM response that may be wrapped in markdown fences
+    or contain prose before/after the JSON block.
+
+    Strategy:
+        1. Try simple startswith("```") fence stripping.
+        2. Search for the LAST ```json ... ``` block via regex.
+        3. Find the first ``{`` and last ``}`` and extract that substring.
+        4. Fall back to returning the raw text (let json.loads report the error).
+    """
+    stripped = text.strip()
+
+    # Strategy 1: simple fence stripping (existing logic)
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines)
+
+    # Strategy 2: find last ```json ... ``` block
+    json_fences = list(re.finditer(r"```json\s*\n(.*?)```", stripped, re.DOTALL))
+    if json_fences:
+        return json_fences[-1].group(1).strip()
+
+    # Strategy 3: find first { and last }
+    first_brace = stripped.find("{")
+    last_brace = stripped.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        return stripped[first_brace : last_brace + 1]
+
+    # Strategy 4: return raw text, let json.loads handle the error
+    return stripped
 
 # Thread-safe runtime context — set by create_agent_graph() before compilation.
 # Uses contextvars for async-safe isolation (threading.local does not protect
@@ -96,6 +156,9 @@ class _RuntimeContext:
     def get_llm(cls) -> Any:
         return cls._llm.get()
 
+
+# Thread-safety lock for global mutable state in create_agent_graph
+_config_lock = threading.Lock()
 
 # Backward-compatible aliases (kept for any external imports)
 _RUNTIME_TOOL_REGISTRY: dict[str, Any] = {}
@@ -263,10 +326,12 @@ async def _llm_analyze(
     file_type_hints: list[str],
 ) -> dict:
     """Use LLM for deep task analysis. / 使用 LLM 进行深度任务分析。"""
+    safe_request = _sanitize_prompt_input(request)
+    safe_file_info = _sanitize_prompt_input(json.dumps(file_info, ensure_ascii=False))
     prompt = (
         "Analyze this document processing task and return ONLY valid JSON.\n\n"
-        f"Task: {request}\n"
-        f"File Info: {json.dumps(file_info, ensure_ascii=False)}\n"
+        f"Task: {safe_request}\n"
+        f"File Info: {safe_file_info}\n"
         f"File Type Hints: {file_type_hints}\n\n"
         "Return JSON with these keys:\n"
         "- task_types: list of categories from [document_parse, table_extract, "
@@ -281,18 +346,13 @@ async def _llm_analyze(
     )
 
     response_text = await _call_llm(llm_client, prompt)
-    # Strip markdown fences if present
-    response_text = response_text.strip()
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        # Remove first and last fence lines
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
+    response_text = _extract_json_from_response(response_text)
 
-    assessment = json.loads(response_text)
+    try:
+        assessment = json.loads(response_text)
+    except json.JSONDecodeError:
+        logger.warning("LLM analysis response was not valid JSON, using heuristic fallback")
+        assessment = _heuristic_analyze(request, file_info, file_type_hints)
     return assessment
 
 
@@ -559,15 +619,25 @@ async def execute_step(state: AgentState) -> dict:
 
     # If a re-plan targeted a specific step index, honour it
     _verification_check: dict | None = state.get("verification_result")
+    _clear_replan_target = False
     if _verification_check and "_replan_target_index" in _verification_check:
         target = _verification_check.get("_replan_target_index")
         if isinstance(target, int) and plan is not None and 0 <= target < len(plan):
             step_idx = target
+            _clear_replan_target = True
             logger.info(_log(state, f"Re-plan: jumping to step index {target}"))
+
+    # Prepare a cleared verification_result if _replan_target_index was consumed
+    _replan_clear_update: dict = {}
+    if _clear_replan_target and _verification_check is not None:
+        cleared_verification = dict(_verification_check)
+        cleared_verification["_replan_target_index"] = None
+        _replan_clear_update["verification_result"] = cleared_verification
 
     if plan is None or step_idx >= len(plan):
         logger.warning(_log(state, f"execute_step called but no plan or index out of range (idx={step_idx})"))
         return {
+            **_replan_clear_update,
             "status": "completed",
             "logs": [_log(state, "No more steps to execute")],
         }
@@ -592,6 +662,7 @@ async def execute_step(state: AgentState) -> dict:
         subtask["status"] = "failed"
         subtask["retry_count"] += 1
         return {
+            **_replan_clear_update,
             "execution_plan": plan,
             "errors": [error_msg],
             "current_step_index": step_idx,  # stays the same; error_handler decides
@@ -650,6 +721,7 @@ async def execute_step(state: AgentState) -> dict:
         advance = step_idx + 1
 
         update: dict = {
+            **_replan_clear_update,
             "execution_plan": plan,
             "current_step_index": advance,
             "step_results": [step_result],
@@ -670,6 +742,7 @@ async def execute_step(state: AgentState) -> dict:
         subtask["retry_count"] = subtask.get("retry_count", 0) + 1
 
         return {
+            **_replan_clear_update,
             "execution_plan": plan,
             "current_step_index": step_idx,  # stay on this step for retry
             "errors": [error_msg],
@@ -828,11 +901,13 @@ async def _llm_verify(
             f"  - {s['step_id']}: {s['status']}" for s in plan
         )
 
+    safe_request = _sanitize_prompt_input(request)
+    safe_summary = _sanitize_prompt_input(context_summary)
     prompt = (
         "You are a quality assurance expert for document processing. "
         "Evaluate the following results against the original request.\n\n"
-        f"Original Request: {request}\n\n"
-        f"Results Summary:\n{context_summary}\n\n"
+        f"Original Request: {safe_request}\n\n"
+        f"Results Summary:\n{safe_summary}\n\n"
         f"Execution Plan Status:\n{plan_summary}\n\n"
         "Return ONLY valid JSON:\n"
         "{\n"
@@ -844,16 +919,19 @@ async def _llm_verify(
     )
 
     response_text = await _call_llm(llm_client, prompt)
-    response_text = response_text.strip()
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
+    response_text = _extract_json_from_response(response_text)
 
-    return json.loads(response_text)
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        return {
+            "quality_score": 0.0,
+            "passed": False,
+            "feedback": "LLM response parse error",
+            "issues": ["Failed to parse LLM verification response as JSON"],
+            "retry_steps": [],
+            "suggestions": [],
+        }
 
 
 def _heuristic_verify(
@@ -1442,27 +1520,28 @@ def create_agent_graph(
 
     # --- Apply config overrides ---
     cfg = config or {}
-    if "quality_threshold" in cfg:
-        global QUALITY_THRESHOLD
-        QUALITY_THRESHOLD = float(cfg["quality_threshold"])
-    if "max_retries" in cfg:
-        global MAX_RETRIES
-        MAX_RETRIES = int(cfg["max_retries"])
-    if "max_replan_cycles" in cfg:
-        global MAX_REPLAN_CYCLES
-        MAX_REPLAN_CYCLES = int(cfg["max_replan_cycles"])
+    with _config_lock:
+        if "quality_threshold" in cfg:
+            global QUALITY_THRESHOLD
+            QUALITY_THRESHOLD = float(cfg["quality_threshold"])
+        if "max_retries" in cfg:
+            global MAX_RETRIES
+            MAX_RETRIES = int(cfg["max_retries"])
+        if "max_replan_cycles" in cfg:
+            global MAX_REPLAN_CYCLES
+            MAX_REPLAN_CYCLES = int(cfg["max_replan_cycles"])
 
-    # --- Build the graph ---
+        # --- Build the graph ---
 
-    # Set module-level globals so node functions can access tool_registry & LLM.
-    # LangGraph TypedDict state cannot carry arbitrary keys, so we use this
-    # approach instead of injecting into state.
-    # Update thread-safe context (primary) and module globals (backward compat)
-    _RuntimeContext.set_tools(dict(tool_registry))
-    _RuntimeContext.set_llm(llm_client)
-    global _RUNTIME_TOOL_REGISTRY, _RUNTIME_LLM_CLIENT
-    _RUNTIME_TOOL_REGISTRY = dict(tool_registry)
-    _RUNTIME_LLM_CLIENT = llm_client
+        # Set module-level globals so node functions can access tool_registry & LLM.
+        # LangGraph TypedDict state cannot carry arbitrary keys, so we use this
+        # approach instead of injecting into state.
+        # Update thread-safe context (primary) and module globals (backward compat)
+        _RuntimeContext.set_tools(dict(tool_registry))
+        _RuntimeContext.set_llm(llm_client)
+        global _RUNTIME_TOOL_REGISTRY, _RUNTIME_LLM_CLIENT
+        _RUNTIME_TOOL_REGISTRY = dict(tool_registry)
+        _RUNTIME_LLM_CLIENT = llm_client
 
     graph = StateGraph(AgentState)
 
@@ -1556,7 +1635,6 @@ def create_agent_graph(
         config_arg: dict | None = None,
     ) -> dict:
         """Synchronous wrapped invoke."""
-        import asyncio
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

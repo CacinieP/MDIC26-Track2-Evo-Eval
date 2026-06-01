@@ -193,8 +193,6 @@ async def run_scenario(
     graph: object,
 ) -> dict:
     """Run a single demo scenario: generate sample PDF and process it."""
-    from src.agents.graph import create_agent_graph
-
     name = scenario["name"]
     filename = scenario["filename"]
     file_path = sample_dir / filename

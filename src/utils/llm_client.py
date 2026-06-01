@@ -24,6 +24,20 @@ from typing import Any
 
 from loguru import logger
 
+# Collect known authentication-related exception types for re-raise logic
+_CRITICAL_EXCEPTIONS = [PermissionError]
+try:
+    from anthropic import AuthenticationError as _AnthropicAuthError
+    _CRITICAL_EXCEPTIONS.append(_AnthropicAuthError)
+except (ImportError, AttributeError):
+    pass
+try:
+    from openai import AuthenticationError as _OpenAIAuthError
+    _CRITICAL_EXCEPTIONS.append(_OpenAIAuthError)
+except (ImportError, AttributeError):
+    pass
+_CRITICAL_EXCEPTION_TUPLE = tuple(_CRITICAL_EXCEPTIONS)
+
 
 class LLMClient:
     """
@@ -71,7 +85,8 @@ class LLMClient:
             self.provider = "openai"
 
         self._client = None
-        logger.info(f"LLMClient: provider={self.provider}, model={self.model}, base_url={self.base_url[:50]}...")
+        safe_url = self.base_url.split("?")[0][:30]
+        logger.info(f"LLMClient: provider={self.provider}, model={self.model}, base_url={safe_url}...")
 
     def _ensure_client(self):
         """Lazy-init the underlying SDK client."""
@@ -84,8 +99,10 @@ class LLMClient:
                 self._client = anthropic.Anthropic(
                     api_key=self.api_key,
                     base_url=self.base_url or None,
+                    timeout=120.0,
                 )
-                logger.info(f"LLMClient: Anthropic-compatible client initialized ({self.base_url[:40]})")
+                safe_init_url = (self.base_url or "").split("?")[0][:30]
+                logger.info(f"LLMClient: Anthropic-compatible client initialized ({safe_init_url})")
                 return True
             except ImportError:
                 logger.warning("anthropic package not installed")
@@ -94,7 +111,7 @@ class LLMClient:
         elif self.provider == "openai":
             try:
                 from openai import OpenAI
-                kwargs = {"api_key": self.api_key}
+                kwargs = {"api_key": self.api_key, "timeout": 120.0}
                 if self.base_url:
                     kwargs["base_url"] = self.base_url
                 self._client = OpenAI(**kwargs)
@@ -127,7 +144,10 @@ class LLMClient:
             else:
                 return await self._call_openai(prompt, system)
         except Exception as e:
-            logger.error(f"LLMClient.generate failed: {e}")
+            logger.error(f"LLM generate failed: {type(e).__name__}: {e}")
+            # Re-raise critical/auth errors; return empty only for transient failures
+            if isinstance(e, _CRITICAL_EXCEPTION_TUPLE):
+                raise
             return ""
 
     async def _call_anthropic(self, prompt: str, system: str = "") -> str:
@@ -223,7 +243,8 @@ def create_llm_client(config: dict | None = None) -> LLMClient | None:
             "model": model,
         })
         if client.is_available:
-            logger.info(f"LLM from ANTHROPIC env: {model} @ {anthropic_url[:50]}")
+            safe_anthropic_url = anthropic_url.split("?")[0][:30]
+            logger.info(f"LLM from ANTHROPIC env: {model} @ {safe_anthropic_url}")
             return client
 
     # --- Priority 2: OpenAI-compatible env vars ---
@@ -237,7 +258,8 @@ def create_llm_client(config: dict | None = None) -> LLMClient | None:
             "model": "gpt-4o",
         })
         if client.is_available:
-            logger.info(f"LLM from OPENAI env: gpt-4o @ {openai_url[:50]}")
+            safe_openai_url = openai_url.split("?")[0][:30]
+            logger.info(f"LLM from OPENAI env: gpt-4o @ {safe_openai_url}")
             return client
 
     # --- Priority 3: Config file llm.planner section ---
