@@ -6,7 +6,12 @@ Tests: HTML table parsing, merged cell expansion, Chinese numeral parsing,
 
 import pytest
 
-from src.tools.table_parser import TableParser, TableType
+from src.tools.table_parser import (
+    TableParser,
+    TableType,
+    _extract_numeric,
+    _parse_html_table,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +48,7 @@ class TestHTMLParsing:
             <tr><td>Revenue</td><td>1,234</td></tr>
         </table>
         """
-        result = parser._parse_html_table(html)
+        result = _parse_html_table(html)
         assert result is not None
 
     def test_table_with_colspan(self):
@@ -70,28 +75,29 @@ class TestNumericParsing:
 
     def test_comma_separated_number(self):
         """Parser should handle '1,234,567.89' format."""
-        result = self.parser._parse_numeric("1,234,567.89")
-        assert result is not None
-        if isinstance(result, (int, float)):
-            assert abs(result - 1234567.89) < 0.01
+        cell = _extract_numeric("1,234,567.89")
+        assert cell.value is not None
+        assert abs(cell.value - 1234567.89) < 0.01
 
     def test_parenthesized_negative(self):
         """Parser should convert '(1,234.56)' to -1234.56."""
-        result = self.parser._parse_numeric("(1,234.56)")
-        if isinstance(result, (int, float)):
-            assert result < 0
+        cell = _extract_numeric("(1,234.56)")
+        assert cell.value is not None
+        assert cell.value < 0
+        assert cell.is_negative is True
 
     def test_percentage(self):
         """Parser should handle percentage values."""
-        result = self.parser._parse_numeric("12.5%")
-        assert result is not None
+        cell = _extract_numeric("12.5%")
+        assert cell.value is not None
+        assert cell.is_percentage is True
 
     def test_chinese_unit_wan(self):
         """Parser should handle '万元' unit."""
-        result = self.parser._parse_numeric("1,234.56万元")
-        if isinstance(result, (int, float)):
-            # Should be in base units or have unit info
-            assert result > 0
+        cell = _extract_numeric("1,234.56万元")
+        assert cell.value is not None
+        assert cell.value > 0
+        assert "万" in cell.unit
 
 
 # ---------------------------------------------------------------------------

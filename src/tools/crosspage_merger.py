@@ -786,10 +786,14 @@ class CrossPageMerger:
         # Weak signal: the concatenation makes grammatical sense (very
         # rough — just check if there's no double punctuation)
         if a_last not in sentence_enders and b_first not in sentence_enders:
-            # Check if text_b starts with lowercase (Latin) or is not
-            # a heading
-            if b_first.islower() or ord(b_first) > 0x4E00:
-                # Chinese character range
+            # Reject headings: "3.", "#1", "1、" should never be treated as
+            # continuations, even if the prior block lacked proper punctuation.
+            b_is_heading = bool(re.match(r"^[#\d]+[.、]", text_b.lstrip()))
+            if b_is_heading:
+                return False
+            # Check if text_b starts with lowercase (Latin), a digit
+            # (e.g. "5,000万元..."), or a Chinese character.
+            if b_first.islower() or b_first.isdigit() or ord(b_first) > 0x4E00:
                 if not a_ends_properly:
                     return True
 

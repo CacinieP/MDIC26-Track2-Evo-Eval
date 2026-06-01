@@ -325,7 +325,11 @@ class TestErrorHandling:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_auth_error_returns_empty(self):
+    async def test_auth_error_re_raised_not_swallowed(self):
+        """Auth errors (PermissionError / AuthenticationError) must be re-raised
+        so callers can distinguish config errors from transient failures.
+        See src/utils/llm_client.py:149-151 — critical exceptions propagate.
+        """
         from src.utils.llm_client import LLMClient
 
         client = LLMClient({
@@ -338,5 +342,5 @@ class TestErrorHandling:
         mock_sdk_client.messages.create.side_effect = PermissionError("401 Unauthorized")
         client._client = mock_sdk_client
 
-        result = await client.generate("test")
-        assert result == ""
+        with pytest.raises(PermissionError):
+            await client.generate("test")

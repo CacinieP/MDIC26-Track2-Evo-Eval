@@ -129,8 +129,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "Content-Type"],
 )
 
 
@@ -155,7 +155,12 @@ async def api_key_middleware(request: Request, call_next):
 # --- Request logging middleware ---
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
-    """Log every request with method, path, status code, and duration."""
+    """Log every request with method, path, status code, and duration.
+
+    On unhandled exceptions, return a JSON 500 directly here so the response
+    shape is owned by this middleware and not deferred to the global handler
+    (which would cause double-handling / inconsistent error envelopes).
+    """
     start = time.perf_counter()
     request_id = f"req_{uuid.uuid4().hex[:8]}"
 
@@ -163,13 +168,27 @@ async def request_logging_middleware(request: Request, call_next):
 
     try:
         response: Response = await call_next(request)
+    except HTTPException as http_exc:
+        # Let FastAPI's HTTPException path produce its own response
+        elapsed = time.perf_counter() - start
+        logger.warning(
+            f"[{request_id}] <-- {request.method} {request.url.path} "
+            f"{http_exc.status_code} ({elapsed:.3f}s) http_exc={http_exc.detail}"
+        )
+        return JSONResponse(
+            status_code=http_exc.status_code,
+            content={"detail": http_exc.detail},
+        )
     except Exception as exc:
         elapsed = time.perf_counter() - start
         logger.error(
             f"[{request_id}] <-- {request.method} {request.url.path} "
-            f"500 ({elapsed:.3f}s) exception={exc}"
+            f"500 ({elapsed:.3f}s) exception={type(exc).__name__}: {exc}"
         )
-        raise
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
 
     elapsed = time.perf_counter() - start
     logger.info(

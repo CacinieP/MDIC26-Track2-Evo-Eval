@@ -64,12 +64,15 @@ def cmd_parse(args):
         print(f"[X] File not found: {file_path}")
         sys.exit(1)
 
-    # Validate path is within expected directories
+    # Validate path is within expected directories (hard-fail outside CWD)
     resolved = file_path.resolve()
-    if not str(resolved).startswith(str(Path.cwd().resolve())):
-        # Allow if file is explicitly passed (CLI tool), but log a warning
-        import logging
-        logging.getLogger(__name__).warning(f"File path outside CWD: {resolved}")
+    cwd_resolved = Path.cwd().resolve()
+    try:
+        resolved.relative_to(cwd_resolved)
+    except ValueError:
+        print(f"[X] Refusing to process file outside CWD: {resolved}")
+        print(f"    CWD: {cwd_resolved}")
+        sys.exit(1)
 
     # Validate file extension
     ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.docx', '.pptx', '.html', '.htm', '.tiff', '.bmp'}
@@ -142,11 +145,15 @@ def cmd_batch(args):
         print(f"[X] Directory not found: {input_dir}")
         sys.exit(1)
 
-    # Validate path is within expected directories
+    # Validate path is within expected directories (hard-fail outside CWD)
     resolved_dir = input_dir.resolve()
-    if not str(resolved_dir).startswith(str(Path.cwd().resolve())):
-        import logging
-        logging.getLogger(__name__).warning(f"Directory path outside CWD: {resolved_dir}")
+    cwd_resolved = Path.cwd().resolve()
+    try:
+        resolved_dir.relative_to(cwd_resolved)
+    except ValueError:
+        print(f"[X] Refusing to process directory outside CWD: {resolved_dir}")
+        print(f"    CWD: {cwd_resolved}")
+        sys.exit(1)
 
     supported_exts = {".pdf", ".png", ".jpg", ".jpeg", ".docx", ".pptx", ".html", ".htm", ".tiff", ".bmp"}
     files = [f for f in input_dir.iterdir() if f.suffix.lower() in supported_exts]
