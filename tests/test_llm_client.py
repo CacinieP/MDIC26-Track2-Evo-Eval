@@ -144,7 +144,7 @@ class TestCreateLLMClient:
         monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-test")
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
-        with patch("src.utils.config.load_config", return_value={}):
+        with patch("src.utils.config.load_config", return_value={}),              patch("src.utils.llm_client.LLMClient._ensure_client", return_value=True):
             client = create_llm_client()
         assert client is not None
         assert client.provider == "anthropic"
